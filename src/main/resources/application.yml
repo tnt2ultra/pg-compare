@@ -1,0 +1,14 @@
+spring:
+  main:
+    banner-mode: off
+    web-application-type: none
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+  sql:
+    init:
+      mode: never
+
+logging:
+  level:
+    root: warn
