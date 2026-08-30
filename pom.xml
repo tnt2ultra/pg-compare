@@ -108,6 +108,19 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+            <!-- *IT tests need Docker and run on `mvn verify`, keeping `mvn test` a fast unit-only pass -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

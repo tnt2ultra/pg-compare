@@ -1,27 +1,25 @@
 package com.anri.pgcompare.diff;
 
-import org.springframework.stereotype.Component;
-
 /**
- * Classifies how dangerous a change is for applications using the schema:
- * DROP TABLE/DROP COLUMN breaks code reading that data, ADDs are safe.
+ * Classifies how dangerous a change is for applications using the schema.
+ * Comments are documentation-only and never break a running application; every removal takes
+ * away something applications rely on — data, a uniqueness guarantee that {@code ON CONFLICT}
+ * needs, a referential action, or a query plan — so removals are breaking.
  */
-@Component
 public class SeverityClassifier {
 
     public Severity classify(ObjectType objectType, ChangeType changeType) {
+        if (objectType == ObjectType.COMMENT) {
+            return Severity.INFO;
+        }
         return switch (changeType) {
-            case REMOVED -> switch (objectType) {
-                case TABLE, COLUMN, SEQUENCE -> Severity.BREAKING;
-                case CONSTRAINT, INDEX, COMMENT -> Severity.NON_BREAKING;
-            };
-            case ADDED -> switch (objectType) {
-                case TABLE, COLUMN, SEQUENCE, INDEX, CONSTRAINT, COMMENT -> Severity.NON_BREAKING;
-            };
-            case MODIFIED -> switch (objectType) {
-                case COLUMN -> Severity.BREAKING;
-                case TABLE, CONSTRAINT, INDEX, SEQUENCE, COMMENT -> Severity.NON_BREAKING;
-            };
+            case REMOVED -> Severity.BREAKING;
+            case ADDED -> Severity.NON_BREAKING;
+            // a changed column rewrites data applications already read; a redefined constraint
+            // or index keeps the object in place
+            case MODIFIED -> objectType == ObjectType.COLUMN
+                    ? Severity.BREAKING
+                    : Severity.NON_BREAKING;
         };
     }
 }

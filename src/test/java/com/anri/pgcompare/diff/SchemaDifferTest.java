@@ -1,8 +1,11 @@
 package com.anri.pgcompare.diff;
 
 import com.anri.pgcompare.model.ColumnDef;
+import com.anri.pgcompare.model.ColumnGeneration;
 import com.anri.pgcompare.model.ConstraintDef;
 import com.anri.pgcompare.model.ConstraintType;
+import com.anri.pgcompare.model.GenerationKind;
+import com.anri.pgcompare.model.IdentityKind;
 import com.anri.pgcompare.model.IndexDef;
 import com.anri.pgcompare.model.SchemaSnapshot;
 import com.anri.pgcompare.model.SequenceDef;
@@ -166,6 +169,65 @@ class SchemaDifferTest {
     }
 
     @Test
+    void identityChangeIsDetectedAsBreaking() {
+        SchemaSnapshot source = snapshot(
+                List.of(new TableDef("users", null, List.of(
+                        new ColumnDef("id", "bigint", false, null, null)))),
+                List.of(), List.of(), List.of());
+        SchemaSnapshot target = snapshot(
+                List.of(new TableDef("users", null, List.of(
+                        new ColumnDef("id", "bigint", false, null, IdentityKind.ALWAYS, null, null)))),
+                List.of(), List.of(), List.of());
+
+        SchemaDiff diff = differ.diff(source, target);
+
+        assertThat(diff.entries()).hasSize(1);
+        assertThat(diff.entries().getFirst().changeType()).isEqualTo(ChangeType.MODIFIED);
+        assertThat(diff.entries().getFirst().description())
+                .isEqualTo("identity changed: none -> GENERATED ALWAYS AS IDENTITY");
+    }
+
+    @Test
+    void generatedExpressionChangeIsDetected() {
+        SchemaSnapshot source = snapshot(
+                List.of(new TableDef("docs", null, List.of(new ColumnDef("doubled", "integer", true,
+                        null, null, new ColumnGeneration("(total * 2)", GenerationKind.STORED), null)))),
+                List.of(), List.of(), List.of());
+        SchemaSnapshot target = snapshot(
+                List.of(new TableDef("docs", null, List.of(new ColumnDef("doubled", "integer", true,
+                        null, null, new ColumnGeneration("(total * 3)", GenerationKind.STORED), null)))),
+                List.of(), List.of(), List.of());
+
+        SchemaDiff diff = differ.diff(source, target);
+
+        assertThat(diff.entries()).hasSize(1);
+        assertThat(diff.entries().getFirst().description())
+                .isEqualTo("generation changed: GENERATED ALWAYS AS ((total * 2)) STORED"
+                        + " -> GENERATED ALWAYS AS ((total * 3)) STORED");
+    }
+
+    @Test
+    void constraintOptionChangeWithoutDefinitionChangeIsDetected() {
+        ConstraintDef before = new ConstraintDef("orders_user_fk", ConstraintType.FOREIGN_KEY, "orders",
+                List.of("user_id"), "users", List.of("id"),
+                "FOREIGN KEY (user_id) REFERENCES users(id)");
+        ConstraintDef after = new ConstraintDef("orders_user_fk", ConstraintType.FOREIGN_KEY, "orders",
+                List.of("user_id"), "users", List.of("id"),
+                "FOREIGN KEY (user_id) REFERENCES users(id)", false, true, true);
+        SchemaSnapshot source = snapshot(List.of(new TableDef("orders", null, List.of())),
+                List.of(before), List.of(), List.of());
+        SchemaSnapshot target = snapshot(List.of(new TableDef("orders", null, List.of())),
+                List.of(after), List.of(), List.of());
+
+        SchemaDiff diff = differ.diff(source, target);
+
+        assertThat(diff.entries()).hasSize(1);
+        assertThat(diff.entries().getFirst().changeType()).isEqualTo(ChangeType.MODIFIED);
+        assertThat(diff.entries().getFirst().description())
+                .isEqualTo("options changed: none -> DEFERRABLE INITIALLY DEFERRED");
+    }
+
+    @Test
     void indexChangesAreDetected() {
         SchemaSnapshot source = snapshot(
                 List.of(new TableDef("users", null, List.of())),
@@ -230,7 +292,7 @@ class SchemaDifferTest {
         DiffEntry entry = diff.entries().getFirst();
         assertThat(entry.objectType()).isEqualTo(ObjectType.COMMENT);
         assertThat(entry.changeType()).isEqualTo(ChangeType.MODIFIED);
-        assertThat(entry.severity()).isEqualTo(Severity.NON_BREAKING);
+        assertThat(entry.severity()).isEqualTo(Severity.INFO);
         assertThat(entry.objectName()).isEqualTo("users");
         assertThat(entry.description()).contains("'old comment'").contains("'new comment'");
     }

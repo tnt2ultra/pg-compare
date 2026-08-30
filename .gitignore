@@ -28,3 +28,6 @@ target/
 *.iml
 .vscode/
 .DS_Store
+.qwen
+.zcode
+

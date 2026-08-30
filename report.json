@@ -1,6 +1,0 @@
-{
-  "sourceSchema" : "app_migrated",
-  "targetSchema" : "app_v2",
-  "entries" : [ ],
-  "empty" : true
-}

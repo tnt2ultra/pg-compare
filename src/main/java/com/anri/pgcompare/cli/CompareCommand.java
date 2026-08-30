@@ -62,6 +62,11 @@ public class CompareCommand implements Callable<Integer> {
     @Option(names = {"--ddl"}, description = "Optional migration DDL script to generate")
     private Path ddlFile;
 
+    @Option(names = {"--transaction"}, negatable = true, defaultValue = "true",
+            description = "Wrap the generated DDL script in BEGIN/COMMIT (default: true; "
+                    + "use --no-transaction for statements that cannot run inside a transaction)")
+    private boolean transactional;
+
     private final ConnectionProvider connectionProvider;
     private final SchemaExtractor schemaExtractor;
     private final SchemaDiffer schemaDiffer;
@@ -81,7 +86,7 @@ public class CompareCommand implements Callable<Integer> {
             consoleSummaryPrinter.print(diff);
             jsonReportWriter.write(diff, outputFile);
             if (ddlFile != null) {
-                sqlScriptWriter.write(diff, ddlFile);
+                sqlScriptWriter.write(diff, ddlFile, transactional);
             }
             return diff.isEmpty() ? 0 : 1;
         } catch (CompareException e) {

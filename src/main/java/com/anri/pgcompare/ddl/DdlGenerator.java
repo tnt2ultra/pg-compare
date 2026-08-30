@@ -1,28 +1,17 @@
 package com.anri.pgcompare.ddl;
 
-import com.anri.pgcompare.diff.ChangeType;
 import com.anri.pgcompare.diff.DiffEntry;
 import com.anri.pgcompare.diff.ObjectType;
 import com.anri.pgcompare.diff.SchemaDiff;
-import com.anri.pgcompare.model.ColumnDef;
-import com.anri.pgcompare.model.ConstraintDef;
-import com.anri.pgcompare.model.ConstraintType;
-import com.anri.pgcompare.model.IndexDef;
-import com.anri.pgcompare.model.SequenceDef;
-import com.anri.pgcompare.model.TableDef;
-import org.springframework.stereotype.Component;
+import com.anri.pgcompare.exception.CompareException;
+import com.anri.pgcompare.model.*;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import static com.anri.pgcompare.diff.ChangeType.ADDED;
-import static com.anri.pgcompare.diff.ChangeType.MODIFIED;
-import static com.anri.pgcompare.diff.ChangeType.REMOVED;
+import static com.anri.pgcompare.diff.ChangeType.*;
 
 /**
  * Turns a SchemaDiff (source = state to migrate, target = desired state) into a
@@ -32,8 +21,15 @@ import static com.anri.pgcompare.diff.ChangeType.REMOVED;
  * source schema; extractor definitions were normalized (own schema prefix stripped),
  * so the generator re-qualifies where needed.
  */
-@Component
 public class DdlGenerator {
+
+    /** Matches `FOREIGN KEY (cols) REFERENCES tbl (cols)`, stopping before MATCH / ON clauses. */
+    private static final Pattern FK_HEAD_PATTERN =
+            Pattern.compile("(?i)^\\s*FOREIGN KEY\\s*\\(.*?\\)\\s*REFERENCES\\s+\\S+?\\s*\\(.*?\\)");
+
+    /** An unqualified regclass literal, e.g. the sequence inside {@code nextval('doc_seq'::regclass)}. */
+    private static final Pattern REGCLASS_LITERAL_PATTERN =
+            Pattern.compile("'([\\w$]+)'::(?:pg_catalog\\.)?regclass");
 
     public List<DdlStatement> generate(SchemaDiff diff) {
         String schema = diff.sourceSchema();
@@ -111,21 +107,48 @@ public class DdlGenerator {
     private String createTable(String schema, TableDef table) {
         StringBuilder sql = new StringBuilder("CREATE TABLE ")
                 .append(qualify(schema, table.name())).append(" (\n");
-        for (int i = 0; i < table.columns().size(); i++) {
-            ColumnDef c = table.columns().get(i);
-            sql.append("    ").append(q(c.name())).append(' ').append(c.dataType());
-            if (!c.nullable()) {
-                sql.append(" NOT NULL");
-            }
-            if (c.defaultValue() != null) {
-                sql.append(" DEFAULT ").append(c.defaultValue());
-            }
-            if (i < table.columns().size() - 1) {
+        List<ColumnDef> columns = table.columns();
+        for (int i = 0; i < columns.size(); i++) {
+            sql.append("    ").append(columnBody(schema, columns.get(i)));
+            if (i < columns.size() - 1) {
                 sql.append(',');
             }
             sql.append('\n');
         }
         return sql.append(")").toString();
+    }
+
+    /** Column body shared by CREATE TABLE and ADD COLUMN: type, identity/generation, NOT NULL, DEFAULT. */
+    private String columnBody(String schema, ColumnDef c) {
+        StringBuilder sql = new StringBuilder(q(c.name())).append(' ').append(c.dataType());
+        if (c.identity() != null) {
+            sql.append(" GENERATED ").append(c.identity().sql()).append(" AS IDENTITY");
+        }
+        if (c.generated() != null) {
+            sql.append(" GENERATED ALWAYS AS (").append(c.generated().expression()).append(") ")
+                    .append(c.generated().kind().sql());
+        }
+        if (!c.nullable()) {
+            sql.append(" NOT NULL");
+        }
+        if (c.defaultValue() != null) {
+            sql.append(" DEFAULT ").append(qualifyDefault(schema, c.defaultValue()));
+        }
+        return sql.toString();
+    }
+
+    /**
+     * The extractor strips the compared schema from {@code 'seq'::regclass} literals for
+     * comparison; put it back so the default resolves without relying on search_path.
+     * Already-qualified (cross-schema) references are left alone.
+     */
+    private String qualifyDefault(String schema, String defaultValue) {
+        Matcher literal = REGCLASS_LITERAL_PATTERN.matcher(defaultValue);
+        if (!literal.find()) {
+            return defaultValue;
+        }
+        return literal.replaceFirst(
+                Matcher.quoteReplacement("'" + q(schema) + "." + q(literal.group(1)) + "'::regclass"));
     }
 
     private void columns(SchemaDiff diff, String schema, Set<String> droppedTables, List<DdlStatement> out) {
@@ -139,16 +162,11 @@ public class DdlGenerator {
             switch (e.changeType()) {
                 case ADDED -> {
                     ColumnDef c = (ColumnDef) e.after();
-                    StringBuilder sql = new StringBuilder("ALTER TABLE ").append(table)
-                            .append(" ADD COLUMN ").append(column).append(' ').append(c.dataType());
-                    if (!c.nullable()) {
-                        sql.append(" NOT NULL");
-                    }
-                    if (c.defaultValue() != null) {
-                        sql.append(" DEFAULT ").append(c.defaultValue());
-                    }
-                    out.add(DdlStatement.commented(sql.toString(),
-                            c.nullable() ? null : "review: NOT NULL on existing rows requires a default"));
+                    out.add(DdlStatement.commented(
+                            "ALTER TABLE %s ADD COLUMN %s".formatted(table, columnBody(schema, c)),
+                            c.nullable() || c.identity() != null || c.generated() != null
+                                    ? null
+                                    : "review: NOT NULL on existing rows requires a default"));
                     if (c.comment() != null) {
                         out.add(DdlStatement.of("COMMENT ON COLUMN %s.%s IS %s"
                                 .formatted(table, column, commentLiteral(c.comment()))));
@@ -157,13 +175,25 @@ public class DdlGenerator {
                 case REMOVED -> out.add(DdlStatement.commented(
                         "ALTER TABLE %s DROP COLUMN %s".formatted(table, column),
                         "BREAKING: drops column data"));
-                case MODIFIED -> emitColumnAlter(table, column, (ColumnDef) e.before(), (ColumnDef) e.after(), out);
+                case MODIFIED ->
+                        emitColumnAlter(schema, table, column, (ColumnDef) e.before(), (ColumnDef) e.after(), out);
             }
         }
     }
 
-    private void emitColumnAlter(String table, String column, ColumnDef before, ColumnDef after,
-                                 List<DdlStatement> out) {
+    private void emitColumnAlter(String schema, String table, String column,
+                                 ColumnDef before, ColumnDef after, List<DdlStatement> out) {
+        if (!Objects.equals(before.generated(), after.generated())) {
+            // a generation expression cannot be altered in place; the value is derived from the
+            // row, so recreating the column does not lose user data
+            out.add(DdlStatement.commented(
+                    "ALTER TABLE %s DROP COLUMN %s".formatted(table, column),
+                    "review: generated column is recreated from its new expression,"
+                            + " dependent indexes and constraints are dropped by PostgreSQL"));
+            out.add(DdlStatement.of("ALTER TABLE %s ADD COLUMN %s"
+                    .formatted(table, columnBody(schema, after))));
+            return;
+        }
         if (!before.dataType().equals(after.dataType())) {
             out.add(DdlStatement.commented(
                     "ALTER TABLE %s ALTER COLUMN %s TYPE %s".formatted(table, column, after.dataType()),
@@ -177,7 +207,23 @@ public class DdlGenerator {
         if (!Objects.equals(before.defaultValue(), after.defaultValue())) {
             out.add(DdlStatement.of(after.defaultValue() == null
                     ? "ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT".formatted(table, column)
-                    : "ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s".formatted(table, column, after.defaultValue())));
+                    : "ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s".formatted(
+                            table, column, qualifyDefault(schema, after.defaultValue()))));
+        }
+        if (!Objects.equals(before.identity(), after.identity())) {
+            if (after.identity() == null) {
+                out.add(DdlStatement.commented(
+                        "ALTER TABLE %s ALTER COLUMN %s DROP IDENTITY IF EXISTS".formatted(table, column),
+                        "identity removed; the backing sequence is left behind, review whether to drop it"));
+            } else if (before.identity() == null) {
+                out.add(DdlStatement.commented(
+                        "ALTER TABLE %s ALTER COLUMN %s ADD GENERATED %s AS IDENTITY".formatted(
+                                table, column, after.identity().sql()),
+                        "review: existing rows need values before an identity can take over"));
+            } else {
+                out.add(DdlStatement.of("ALTER TABLE %s ALTER COLUMN %s SET GENERATED %s".formatted(
+                        table, column, after.identity().sql())));
+            }
         }
     }
 
@@ -248,24 +294,28 @@ public class DdlGenerator {
             String[] parts = splitName(e.objectName());
             out.add(DdlStatement.commented(
                     "ALTER TABLE %s DROP CONSTRAINT %s".formatted(qualify(schema, parts[0]), q(parts[1])),
-                    "definition changed, re-added below"));
+                    "definition changed, re-added below; the drop fails if a foreign key"
+                            + " or a view depends on this constraint"));
         }
+        // a modified constraint is dropped above and re-created from the target definition here;
         // non-FK before FK so referenced tables are ready before validation
-        emitAddConstraints(added, schema, out, false);
-        emitAddConstraints(added, schema, out, true);
+        List<DiffEntry> toCreate = new ArrayList<>(added);
+        toCreate.addAll(modified);
+        emitAddConstraints(toCreate, schema, out, false);
+        emitAddConstraints(toCreate, schema, out, true);
     }
 
-    private void emitAddConstraints(List<DiffEntry> added, String schema, List<DdlStatement> out,
+    private void emitAddConstraints(List<DiffEntry> toCreate, String schema, List<DdlStatement> out,
                                     boolean foreignKeys) {
-        for (DiffEntry e : added) {
+        for (DiffEntry e : toCreate) {
             ConstraintDef c = (ConstraintDef) e.after();
             boolean isFk = c.type() == ConstraintType.FOREIGN_KEY;
             if (isFk != foreignKeys) {
                 continue;
             }
             String[] parts = splitName(e.objectName());
-            String sql = "ALTER TABLE %s ADD CONSTRAINT %s %s".formatted(
-                    qualify(schema, parts[0]), q(parts[1]), inlineDefinition(schema, c));
+            String sql = "ALTER TABLE %s ADD CONSTRAINT %s %s%s".formatted(
+                    qualify(schema, parts[0]), q(parts[1]), inlineDefinition(schema, c), c.flagsClause());
             out.add(DdlStatement.of(sql));
         }
     }
@@ -274,15 +324,37 @@ public class DdlGenerator {
         return switch (c.type()) {
             case PRIMARY_KEY -> "PRIMARY KEY (" + columns(c.columns()) + ")";
             case UNIQUE -> "UNIQUE (" + columns(c.columns()) + ")";
-            case CHECK -> c.definition() == null ? "CHECK (TRUE)" : stripPrefix(c.definition());
+            case CHECK, EXCLUSION -> requireDefinition(c);
             case FOREIGN_KEY -> "FOREIGN KEY (" + columns(c.columns()) + ") REFERENCES "
-                    + qualify(schema, c.referencedTable()) + " (" + columns(c.referencedColumns()) + ")";
+                    + qualify(schema, c.referencedTable()) + " (" + columns(c.referencedColumns()) + ")"
+                    + foreignKeyTail(c.definition());
         };
     }
 
-    private String stripPrefix(String pgDef) {
-        int open = pgDef.indexOf('(');
-        return open >= 0 ? pgDef.substring(open) : pgDef;
+    /** EXCLUDE and CHECK are rendered from the canonical definition only; without one there is nothing to emit. */
+    private String requireDefinition(ConstraintDef c) {
+        if (c.definition() == null) {
+            throw new CompareException(
+                    "Cannot generate DDL for %s constraint '%s': no definition".formatted(c.type(), c.name()));
+        }
+        return c.definition();
+    }
+
+    /**
+     * {@code pg_get_constraintdef} renders MATCH / ON DELETE / ON UPDATE only inside the
+     * definition text, after the referenced column list, so the tail is carried over verbatim
+     * instead of being rebuilt from the (absent) structured fields.
+     */
+    private String foreignKeyTail(String definition) {
+        if (definition == null) {
+            return "";
+        }
+        Matcher head = FK_HEAD_PATTERN.matcher(definition);
+        if (!head.find()) {
+            return "";
+        }
+        String tail = definition.substring(head.end()).trim();
+        return tail.isEmpty() ? "" : " " + tail;
     }
 
     private String columns(List<String> columns) {
@@ -322,7 +394,7 @@ public class DdlGenerator {
     /** Index definitions were normalized (schema prefix stripped); re-qualify the table. */
     private String qualifyIndexTable(String definition, String schema) {
         return definition.replaceFirst("(?i)(\\sON\\s)(\"?[\\w]+\"?)(\\s|\\()",
-                "$1" + java.util.regex.Matcher.quoteReplacement(q(schema)) + ".$2$3");
+                "$1" + Matcher.quoteReplacement(q(schema)) + ".$2$3");
     }
 
     private List<DiffEntry> select(SchemaDiff diff, ObjectType objectType) {
@@ -334,7 +406,7 @@ public class DdlGenerator {
     /** Word-boundary match of column names in a canonical index definition. */
     private boolean mentionsAnyColumn(String definition, Set<String> columnNames) {
         for (String column : columnNames) {
-            if (definition.matches("(?i).*\\b" + java.util.regex.Pattern.quote(column) + "\\b.*")) {
+            if (definition.matches("(?i).*\\b" + Pattern.quote(column) + "\\b.*")) {
                 return true;
             }
         }

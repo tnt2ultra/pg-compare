@@ -1,6 +1,9 @@
 package com.anri.pgcompare.extractor;
 
 import com.anri.pgcompare.model.ColumnDef;
+import com.anri.pgcompare.model.ColumnGeneration;
+import com.anri.pgcompare.model.GenerationKind;
+import com.anri.pgcompare.model.IdentityKind;
 import com.anri.pgcompare.model.TableDef;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -33,7 +36,9 @@ public class TableExtractor {
                    a.attname AS name,
                    pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
                    NOT a.attnotnull AS nullable,
-                   pg_get_expr(d.adbin, d.adrelid) AS default_value,
+                   a.attidentity AS identity,
+                   a.attgenerated AS generated,
+                   pg_get_expr(d.adbin, d.adrelid) AS column_expression,
                    de.description AS comment
             FROM pg_catalog.pg_attribute a
             JOIN pg_catalog.pg_class tbl ON tbl.oid = a.attrelid
@@ -47,11 +52,16 @@ public class TableExtractor {
     public List<TableDef> extract(JdbcTemplate jdbc, String schema) {
         Map<String, List<ColumnDef>> columnsByTable = new LinkedHashMap<>();
         jdbc.query(COLUMNS_SQL, rs -> {
+            String expression = DefinitionNormalizer.normalizeDefault(rs.getString("column_expression"), schema);
+            char generated = code(rs.getString("generated"));
             ColumnDef column = new ColumnDef(
                     rs.getString("name"),
                     rs.getString("data_type"),
                     rs.getBoolean("nullable"),
-                    DefinitionNormalizer.normalizeDefault(rs.getString("default_value"), schema),
+                    generated == '\0' ? expression : null,
+                    IdentityKind.fromCatalogCode(code(rs.getString("identity"))),
+                    generated == '\0' ? null
+                            : new ColumnGeneration(expression, GenerationKind.fromCatalogCode(generated)),
                     rs.getString("comment"));
             columnsByTable.computeIfAbsent(rs.getString("table_name"), k -> new ArrayList<>()).add(column);
         }, schema);
@@ -61,5 +71,10 @@ public class TableExtractor {
                         rs.getString("comment"),
                         columnsByTable.getOrDefault(rs.getString("name"), List.of())),
                 schema);
+    }
+
+    /** pg_catalog flags are blank-padded single characters; '\0' marks "not set". */
+    private static char code(String value) {
+        return value == null || value.isEmpty() ? '\0' : value.charAt(0);
     }
 }

@@ -1,15 +1,15 @@
 package com.anri.pgcompare.diff;
 
 import com.anri.pgcompare.model.ColumnDef;
+import com.anri.pgcompare.model.ColumnGeneration;
 import com.anri.pgcompare.model.ConstraintDef;
+import com.anri.pgcompare.model.IdentityKind;
 import com.anri.pgcompare.model.IndexDef;
 import com.anri.pgcompare.model.SchemaSnapshot;
 import com.anri.pgcompare.model.SequenceDef;
 import com.anri.pgcompare.model.TableDef;
-import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +21,6 @@ import java.util.function.Function;
  * Objects are keyed by lowercased name — PostgreSQL stores unquoted identifiers
  * lowercased, so this only canonicalizes what the server already folds.
  */
-@Component
 public class SchemaDiffer {
 
     private final SeverityClassifier severityClassifier;
@@ -109,7 +108,24 @@ public class SchemaDiffer {
             changes.add("default changed: %s -> %s".formatted(
                     display(before.defaultValue()), display(after.defaultValue())));
         }
+        if (!Objects.equals(before.identity(), after.identity())) {
+            changes.add("identity changed: %s -> %s".formatted(
+                    displayIdentity(before.identity()), displayIdentity(after.identity())));
+        }
+        if (!Objects.equals(before.generated(), after.generated())) {
+            changes.add("generation changed: %s -> %s".formatted(
+                    displayGeneration(before.generated()), displayGeneration(after.generated())));
+        }
         return changes;
+    }
+
+    private String displayIdentity(IdentityKind identity) {
+        return identity == null ? "none" : "GENERATED " + identity.sql() + " AS IDENTITY";
+    }
+
+    private String displayGeneration(ColumnGeneration generated) {
+        return generated == null ? "none"
+                : "GENERATED ALWAYS AS (%s) %s".formatted(generated.expression(), generated.kind().sql());
     }
 
     /**
@@ -145,13 +161,33 @@ public class SchemaDiffer {
             if (after == null) {
                 entries.add(remove(ObjectType.CONSTRAINT, e.getKey(), before,
                         "Constraint exists only in source"));
-            } else if (!Objects.equals(before.definition(), after.definition())) {
-                entries.add(new DiffEntry(ObjectType.CONSTRAINT, e.getKey(), ChangeType.MODIFIED,
-                        severityClassifier.classify(ObjectType.CONSTRAINT, ChangeType.MODIFIED),
-                        "definition changed: %s -> %s".formatted(before.definition(), after.definition()),
-                        before, after));
+            } else {
+                List<String> changes = constraintChanges(before, after);
+                if (!changes.isEmpty()) {
+                    entries.add(new DiffEntry(ObjectType.CONSTRAINT, e.getKey(), ChangeType.MODIFIED,
+                            severityClassifier.classify(ObjectType.CONSTRAINT, ChangeType.MODIFIED),
+                            String.join("; ", changes), before, after));
+                }
             }
         }
+    }
+
+    private List<String> constraintChanges(ConstraintDef before, ConstraintDef after) {
+        List<String> changes = new ArrayList<>();
+        if (!Objects.equals(before.definition(), after.definition())) {
+            changes.add("definition changed: %s -> %s".formatted(before.definition(), after.definition()));
+        }
+        if (!before.flagsClause().equals(after.flagsClause())) {
+            // pg_get_constraintdef renders neither deferrability nor NOT VALID, so options
+            // are compared through the structured flags that produce them
+            changes.add("options changed: %s -> %s".formatted(
+                    displayFlags(before.flagsClause()), displayFlags(after.flagsClause())));
+        }
+        return changes;
+    }
+
+    private String displayFlags(String flagsClause) {
+        return flagsClause.isEmpty() ? "none" : flagsClause.trim();
     }
 
     private void diffIndexes(SchemaSnapshot source, SchemaSnapshot target, List<DiffEntry> entries) {
