@@ -27,7 +27,7 @@ class DdlGeneratorTest {
 
     @Test
     void addedTableGeneratesCreateWithColumns() {
-        TableDef table = new TableDef("users", List.of(
+        TableDef table = new TableDef("users", null, List.of(
                 new ColumnDef("id", "bigint", false, null, null),
                 new ColumnDef("email", "character varying(255)", true, null, null)));
         SchemaDiff d = diff(List.of(new DiffEntry(ObjectType.TABLE, "users", ChangeType.ADDED,
@@ -45,7 +45,7 @@ class DdlGeneratorTest {
 
     @Test
     void addedTableIncludesDefaults() {
-        TableDef table = new TableDef("users", List.of(
+        TableDef table = new TableDef("users", null, List.of(
                 new ColumnDef("created_at", "timestamp with time zone", false, "now()", null)));
         SchemaDiff d = diff(List.of(new DiffEntry(ObjectType.TABLE, "users", ChangeType.ADDED,
                 Severity.NON_BREAKING, "added", null, table)));
@@ -58,7 +58,7 @@ class DdlGeneratorTest {
     @Test
     void removedTableGeneratesBreakingDrop() {
         SchemaDiff d = diff(List.of(new DiffEntry(ObjectType.TABLE, "users", ChangeType.REMOVED,
-                Severity.BREAKING, "removed", new TableDef("users", List.of()), null)));
+                Severity.BREAKING, "removed", new TableDef("users", null, List.of()), null)));
 
         List<DdlStatement> statements = generator.generate(d);
 
@@ -246,7 +246,7 @@ class DdlGeneratorTest {
     void droppedTableSkipsItsConstraintsIndexesAndColumns() {
         SchemaDiff d = diff(List.of(
                 new DiffEntry(ObjectType.TABLE, "legacy", ChangeType.REMOVED, Severity.BREAKING, "removed",
-                        new TableDef("legacy", List.of()), null),
+                        new TableDef("legacy", null, List.of()), null),
                 new DiffEntry(ObjectType.CONSTRAINT, "legacy.legacy_pkey", ChangeType.REMOVED,
                         Severity.NON_BREAKING, "removed",
                         new ConstraintDef("legacy_pkey", ConstraintType.PRIMARY_KEY, "legacy",
@@ -263,12 +263,82 @@ class DdlGeneratorTest {
     }
 
     @Test
+    void commentChangesGenerateCommentOnStatements() {
+        SchemaDiff d = diff(List.of(
+                new DiffEntry(ObjectType.COMMENT, "users", ChangeType.MODIFIED, Severity.NON_BREAKING,
+                        "comment changed", new TableDef("users", "old", List.of()),
+                        new TableDef("users", "target comment", List.of())),
+                new DiffEntry(ObjectType.COMMENT, "users.email", ChangeType.MODIFIED, Severity.NON_BREAKING,
+                        "comment changed",
+                        new ColumnDef("email", "text", true, null, "old"),
+                        new ColumnDef("email", "text", true, null, "User email"))));
+
+        List<DdlStatement> statements = generator.generate(d);
+
+        assertThat(statements).extracting(DdlStatement::sql).containsExactly(
+                "COMMENT ON TABLE \"app\".\"users\" IS 'target comment'",
+                "COMMENT ON COLUMN \"app\".\"users\".\"email\" IS 'User email'");
+    }
+
+    @Test
+    void removedCommentGeneratesCommentIsNull() {
+        SchemaDiff d = diff(List.of(
+                new DiffEntry(ObjectType.COMMENT, "users", ChangeType.MODIFIED, Severity.NON_BREAKING,
+                        "comment changed", new TableDef("users", "old", List.of()),
+                        new TableDef("users", null, List.of()))));
+
+        List<DdlStatement> statements = generator.generate(d);
+
+        assertThat(statements.getFirst().sql()).isEqualTo("COMMENT ON TABLE \"app\".\"users\" IS NULL");
+    }
+
+    @Test
+    void commentLiteralsEscapeSingleQuotes() {
+        SchemaDiff d = diff(List.of(
+                new DiffEntry(ObjectType.COMMENT, "users", ChangeType.MODIFIED, Severity.NON_BREAKING,
+                        "comment changed", new TableDef("users", null, List.of()),
+                        new TableDef("users", "user's table", List.of()))));
+
+        List<DdlStatement> statements = generator.generate(d);
+
+        assertThat(statements.getFirst().sql()).isEqualTo("COMMENT ON TABLE \"app\".\"users\" IS 'user''s table'");
+    }
+
+    @Test
+    void commentOnDroppedTableIsSkipped() {
+        SchemaDiff d = diff(List.of(
+                new DiffEntry(ObjectType.TABLE, "legacy", ChangeType.REMOVED, Severity.BREAKING, "removed",
+                        new TableDef("legacy", null, List.of()), null),
+                new DiffEntry(ObjectType.COMMENT, "legacy", ChangeType.MODIFIED, Severity.NON_BREAKING,
+                        "comment changed", new TableDef("legacy", "old", List.of()),
+                        new TableDef("legacy", "new", List.of()))));
+
+        List<DdlStatement> statements = generator.generate(d);
+
+        assertThat(statements).hasSize(1);
+        assertThat(statements.getFirst().sql()).isEqualTo("DROP TABLE \"app\".\"legacy\"");
+    }
+
+    @Test
+    void addedTableWithCommentEmitsCommentOn() {
+        SchemaDiff d = diff(List.of(
+                new DiffEntry(ObjectType.TABLE, "users", ChangeType.ADDED, Severity.NON_BREAKING, "added", null,
+                        new TableDef("users", "User accounts", List.of()))));
+
+        List<DdlStatement> statements = generator.generate(d);
+
+        assertThat(statements).extracting(DdlStatement::sql).containsExactly(
+                "CREATE TABLE \"app\".\"users\" (\n)",
+                "COMMENT ON TABLE \"app\".\"users\" IS 'User accounts'");
+    }
+
+    @Test
     void orderIsSequencesTablesColumnsConstraintsIndexes() {
         SchemaDiff d = diff(List.of(
                 new DiffEntry(ObjectType.INDEX, "users.idx", ChangeType.ADDED, Severity.NON_BREAKING, "d", null,
                         new IndexDef("idx", "users", false, "CREATE INDEX idx ON users USING btree (email)")),
                 new DiffEntry(ObjectType.TABLE, "users", ChangeType.ADDED, Severity.NON_BREAKING, "d", null,
-                        new TableDef("users", List.of())),
+                        new TableDef("users", null, List.of())),
                 new DiffEntry(ObjectType.SEQUENCE, "seq", ChangeType.ADDED, Severity.NON_BREAKING, "d", null,
                         new SequenceDef("seq", 1, 1, 1, 100)),
                 new DiffEntry(ObjectType.CONSTRAINT, "users.pk", ChangeType.ADDED, Severity.NON_BREAKING, "d", null,

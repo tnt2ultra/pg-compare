@@ -5,21 +5,25 @@ import com.anri.pgcompare.model.TableDef;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Reads tables and columns from pg_catalog. All columns of the schema are fetched
- * in one query and grouped by table in memory.
+ * Reads tables, columns and their comments from pg_catalog. All rows of the schema
+ * are fetched in one query per kind and grouped by table in memory.
  */
 @Component
 public class TableExtractor {
 
     private static final String TABLES_SQL = """
-            SELECT c.relname AS name
+            SELECT c.relname AS name,
+                   de.description AS comment
             FROM pg_catalog.pg_class c
             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_catalog.pg_description de
+                   ON de.objoid = c.oid AND de.objsubid = 0
             WHERE n.nspname = ? AND c.relkind = 'r'
             ORDER BY c.relname
             """;
@@ -49,13 +53,13 @@ public class TableExtractor {
                     rs.getBoolean("nullable"),
                     DefinitionNormalizer.normalizeDefault(rs.getString("default_value"), schema),
                     rs.getString("comment"));
-            columnsByTable.computeIfAbsent(rs.getString("table_name"), k -> new java.util.ArrayList<>()).add(column);
+            columnsByTable.computeIfAbsent(rs.getString("table_name"), k -> new ArrayList<>()).add(column);
         }, schema);
 
-        List<TableDef> tables = jdbc.query(TABLES_SQL,
+        return jdbc.query(TABLES_SQL,
                 (rs, i) -> new TableDef(rs.getString("name"),
+                        rs.getString("comment"),
                         columnsByTable.getOrDefault(rs.getString("name"), List.of())),
                 schema);
-        return tables;
     }
 }

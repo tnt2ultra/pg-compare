@@ -54,6 +54,7 @@ public class DdlGenerator {
         sequences(diff, schema, statements);
         tables(diff, schema, statements);
         columns(diff, schema, droppedTables, statements);
+        comments(diff, schema, droppedTables, statements);
         constraints(diff, schema, droppedTables, droppedColumnsByTable, statements);
         indexes(diff, schema, droppedTables, droppedColumnsByTable, statements);
         return statements;
@@ -96,6 +97,10 @@ public class DdlGenerator {
             if (e.changeType() == ADDED) {
                 TableDef t = (TableDef) e.after();
                 out.add(DdlStatement.of(createTable(schema, t)));
+                if (t.comment() != null) {
+                    out.add(DdlStatement.of("COMMENT ON TABLE %s IS %s"
+                            .formatted(qualify(schema, t.name()), commentLiteral(t.comment()))));
+                }
             } else if (e.changeType() == REMOVED) {
                 out.add(DdlStatement.commented("DROP TABLE %s".formatted(qualify(schema, e.objectName())),
                         "BREAKING: drops all data in the table"));
@@ -144,6 +149,10 @@ public class DdlGenerator {
                     }
                     out.add(DdlStatement.commented(sql.toString(),
                             c.nullable() ? null : "review: NOT NULL on existing rows requires a default"));
+                    if (c.comment() != null) {
+                        out.add(DdlStatement.of("COMMENT ON COLUMN %s.%s IS %s"
+                                .formatted(table, column, commentLiteral(c.comment()))));
+                    }
                 }
                 case REMOVED -> out.add(DdlStatement.commented(
                         "ALTER TABLE %s DROP COLUMN %s".formatted(table, column),
@@ -170,6 +179,40 @@ public class DdlGenerator {
                     ? "ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT".formatted(table, column)
                     : "ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s".formatted(table, column, after.defaultValue())));
         }
+    }
+
+    /** COMMENT ON statements for changed table/column comments (target state wins). */
+    private void comments(SchemaDiff diff, String schema, Set<String> droppedTables,
+                          List<DdlStatement> out) {
+        for (DiffEntry e : select(diff, ObjectType.COMMENT)) {
+            String[] parts = splitName(e.objectName());
+            if (droppedTables.contains(parts[0].toLowerCase())) {
+                continue;
+            }
+            String targetComment = commentOf(e.after());
+            if (parts.length == 1) {
+                out.add(DdlStatement.of("COMMENT ON TABLE %s IS %s"
+                        .formatted(qualify(schema, parts[0]), commentLiteral(targetComment))));
+            } else {
+                out.add(DdlStatement.of("COMMENT ON COLUMN %s.%s IS %s"
+                        .formatted(qualify(schema, parts[0]), q(parts[1]), commentLiteral(targetComment))));
+            }
+        }
+    }
+
+    private String commentOf(Object owner) {
+        if (owner instanceof TableDef t) {
+            return t.comment();
+        }
+        if (owner instanceof ColumnDef c) {
+            return c.comment();
+        }
+        return null;
+    }
+
+    /** SQL string literal; null renders as NULL (COMMENT ... IS NULL removes the comment). */
+    private String commentLiteral(String comment) {
+        return comment == null ? "NULL" : "'" + comment.replace("'", "''") + "'";
     }
 
     private void constraints(SchemaDiff diff, String schema, Set<String> droppedTables,

@@ -5,5 +5,6 @@ public enum ObjectType {
     COLUMN,
     CONSTRAINT,
     INDEX,
-    SEQUENCE
+    SEQUENCE,
+    COMMENT
 }

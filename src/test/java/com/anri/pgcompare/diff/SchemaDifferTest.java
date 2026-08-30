@@ -27,7 +27,7 @@ class SchemaDifferTest {
     @Test
     void identicalSnapshotsProduceNoEntries() {
         SchemaSnapshot s = snapshot(
-                List.of(new TableDef("users", List.of(
+                List.of(new TableDef("users", null, List.of(
                         new ColumnDef("id", "bigint", false, null, null)))),
                 List.of(new ConstraintDef("users_pkey", ConstraintType.PRIMARY_KEY, "users",
                         List.of("id"), null, null, "PRIMARY KEY (id)")),
@@ -42,7 +42,7 @@ class SchemaDifferTest {
     void addedAndRemovedTablesAreDetected() {
         SchemaSnapshot source = snapshot(List.of(), List.of(), List.of(), List.of());
         SchemaSnapshot target = snapshot(
-                List.of(new TableDef("orders", List.of())),
+                List.of(new TableDef("orders", null, List.of())),
                 List.of(), List.of(), List.of());
 
         SchemaDiff diff = differ.diff(source, target);
@@ -57,7 +57,7 @@ class SchemaDifferTest {
     @Test
     void removedTableIsBreaking() {
         SchemaSnapshot source = snapshot(
-                List.of(new TableDef("orders", List.of())),
+                List.of(new TableDef("orders", null, List.of())),
                 List.of(), List.of(), List.of());
         SchemaSnapshot target = snapshot(List.of(), List.of(), List.of(), List.of());
 
@@ -71,11 +71,11 @@ class SchemaDifferTest {
     @Test
     void columnTypeChangeIsModifiedAndBreaking() {
         SchemaSnapshot source = snapshot(
-                List.of(new TableDef("users", List.of(
+                List.of(new TableDef("users", null, List.of(
                         new ColumnDef("email", "character varying(100)", true, null, null)))),
                 List.of(), List.of(), List.of());
         SchemaSnapshot target = snapshot(
-                List.of(new TableDef("users", List.of(
+                List.of(new TableDef("users", null, List.of(
                         new ColumnDef("email", "character varying(255)", true, null, null)))),
                 List.of(), List.of(), List.of());
 
@@ -93,11 +93,11 @@ class SchemaDifferTest {
     @Test
     void notNullToggleIsDetected() {
         SchemaSnapshot source = snapshot(
-                List.of(new TableDef("users", List.of(
+                List.of(new TableDef("users", null, List.of(
                         new ColumnDef("phone", "text", false, null, null)))),
                 List.of(), List.of(), List.of());
         SchemaSnapshot target = snapshot(
-                List.of(new TableDef("users", List.of(
+                List.of(new TableDef("users", null, List.of(
                         new ColumnDef("phone", "text", true, null, null)))),
                 List.of(), List.of(), List.of());
 
@@ -110,10 +110,10 @@ class SchemaDifferTest {
     @Test
     void addedColumnIsNonBreaking() {
         SchemaSnapshot source = snapshot(
-                List.of(new TableDef("users", List.of())),
+                List.of(new TableDef("users", null, List.of())),
                 List.of(), List.of(), List.of());
         SchemaSnapshot target = snapshot(
-                List.of(new TableDef("users", List.of(
+                List.of(new TableDef("users", null, List.of(
                         new ColumnDef("age", "integer", true, null, null)))),
                 List.of(), List.of(), List.of());
 
@@ -128,11 +128,11 @@ class SchemaDifferTest {
     @Test
     void defaultValueChangeIsDetected() {
         SchemaSnapshot source = snapshot(
-                List.of(new TableDef("users", List.of(
+                List.of(new TableDef("users", null, List.of(
                         new ColumnDef("created_at", "timestamp without time zone", true, "now()", null)))),
                 List.of(), List.of(), List.of());
         SchemaSnapshot target = snapshot(
-                List.of(new TableDef("users", List.of(
+                List.of(new TableDef("users", null, List.of(
                         new ColumnDef("created_at", "timestamp without time zone", true,
                                 "LOCALTIMESTAMP(6)", null)))),
                 List.of(), List.of(), List.of());
@@ -146,13 +146,13 @@ class SchemaDifferTest {
     @Test
     void constraintDefinitionChangeIsDetected() {
         SchemaSnapshot source = snapshot(
-                List.of(new TableDef("orders", List.of())),
+                List.of(new TableDef("orders", null, List.of())),
                 List.of(new ConstraintDef("orders_user_fk", ConstraintType.FOREIGN_KEY, "orders",
                         List.of("user_id"), "users", List.of("id"),
                         "FOREIGN KEY (user_id) REFERENCES users(id)")),
                 List.of(), List.of());
         SchemaSnapshot target = snapshot(
-                List.of(new TableDef("orders", List.of())),
+                List.of(new TableDef("orders", null, List.of())),
                 List.of(new ConstraintDef("orders_user_fk", ConstraintType.FOREIGN_KEY, "orders",
                         List.of("user_id"), "users", List.of("uid"),
                         "FOREIGN KEY (user_id) REFERENCES users(uid)")),
@@ -168,13 +168,13 @@ class SchemaDifferTest {
     @Test
     void indexChangesAreDetected() {
         SchemaSnapshot source = snapshot(
-                List.of(new TableDef("users", List.of())),
+                List.of(new TableDef("users", null, List.of())),
                 List.of(),
                 List.of(new IndexDef("idx_email", "users", false,
                         "CREATE INDEX idx_email ON users USING btree (email)")),
                 List.of());
         SchemaSnapshot target = snapshot(
-                List.of(new TableDef("users", List.of())),
+                List.of(new TableDef("users", null, List.of())),
                 List.of(),
                 List.of(new IndexDef("idx_phone", "users", false,
                         "CREATE INDEX idx_phone ON users USING btree (phone)")),
@@ -204,14 +204,86 @@ class SchemaDifferTest {
     @Test
     void sameNamesDifferentCaseAreMatched() {
         SchemaSnapshot source = snapshot(
-                List.of(new TableDef("Users", List.of())),
+                List.of(new TableDef("Users", null, List.of())),
                 List.of(), List.of(), List.of());
         SchemaSnapshot target = snapshot(
-                List.of(new TableDef("users", List.of())),
+                List.of(new TableDef("users", null, List.of())),
                 List.of(), List.of(), List.of());
 
         SchemaDiff diff = differ.diff(source, target);
 
         assertThat(diff.isEmpty()).isTrue();
+    }
+
+    @Test
+    void tableCommentChangeProducesCommentEntry() {
+        SchemaSnapshot source = snapshot(
+                List.of(new TableDef("users", "old comment", List.of())),
+                List.of(), List.of(), List.of());
+        SchemaSnapshot target = snapshot(
+                List.of(new TableDef("users", "new comment", List.of())),
+                List.of(), List.of(), List.of());
+
+        SchemaDiff diff = differ.diff(source, target);
+
+        assertThat(diff.entries()).hasSize(1);
+        DiffEntry entry = diff.entries().getFirst();
+        assertThat(entry.objectType()).isEqualTo(ObjectType.COMMENT);
+        assertThat(entry.changeType()).isEqualTo(ChangeType.MODIFIED);
+        assertThat(entry.severity()).isEqualTo(Severity.NON_BREAKING);
+        assertThat(entry.objectName()).isEqualTo("users");
+        assertThat(entry.description()).contains("'old comment'").contains("'new comment'");
+    }
+
+    @Test
+    void columnCommentAddedProducesCommentEntry() {
+        SchemaSnapshot source = snapshot(
+                List.of(new TableDef("users", null, List.of(
+                        new ColumnDef("id", "bigint", false, null, null)))),
+                List.of(), List.of(), List.of());
+        SchemaSnapshot target = snapshot(
+                List.of(new TableDef("users", null, List.of(
+                        new ColumnDef("id", "bigint", false, null, "Primary key")))),
+                List.of(), List.of(), List.of());
+
+        SchemaDiff diff = differ.diff(source, target);
+
+        assertThat(diff.entries()).hasSize(1);
+        DiffEntry entry = diff.entries().getFirst();
+        assertThat(entry.objectType()).isEqualTo(ObjectType.COMMENT);
+        assertThat(entry.objectName()).isEqualTo("users.id");
+        assertThat(entry.description()).contains("(no comment)").contains("'Primary key'");
+    }
+
+    @Test
+    void identicalCommentsProduceNoEntries() {
+        SchemaSnapshot source = snapshot(
+                List.of(new TableDef("users", "same", List.of(
+                        new ColumnDef("id", "bigint", false, null, "same column comment")))),
+                List.of(), List.of(), List.of());
+        SchemaSnapshot target = snapshot(
+                List.of(new TableDef("users", "same", List.of(
+                        new ColumnDef("id", "bigint", false, null, "same column comment")))),
+                List.of(), List.of(), List.of());
+
+        SchemaDiff diff = differ.diff(source, target);
+
+        assertThat(diff.isEmpty()).isTrue();
+    }
+
+    @Test
+    void commentRemovedOnTargetIsReported() {
+        SchemaSnapshot source = snapshot(
+                List.of(new TableDef("users", "documented", List.of())),
+                List.of(), List.of(), List.of());
+        SchemaSnapshot target = snapshot(
+                List.of(new TableDef("users", null, List.of())),
+                List.of(), List.of(), List.of());
+
+        SchemaDiff diff = differ.diff(source, target);
+
+        assertThat(diff.entries()).hasSize(1);
+        assertThat(diff.entries().getFirst().objectType()).isEqualTo(ObjectType.COMMENT);
+        assertThat(diff.entries().getFirst().description()).contains("(no comment)");
     }
 }

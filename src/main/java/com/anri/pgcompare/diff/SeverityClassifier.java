@@ -13,16 +13,14 @@ public class SeverityClassifier {
         return switch (changeType) {
             case REMOVED -> switch (objectType) {
                 case TABLE, COLUMN, SEQUENCE -> Severity.BREAKING;
-                case CONSTRAINT -> Severity.NON_BREAKING;
-                case INDEX -> Severity.NON_BREAKING;
+                case CONSTRAINT, INDEX, COMMENT -> Severity.NON_BREAKING;
             };
             case ADDED -> switch (objectType) {
-                case TABLE, COLUMN, SEQUENCE, INDEX -> Severity.NON_BREAKING;
-                case CONSTRAINT -> Severity.NON_BREAKING;
+                case TABLE, COLUMN, SEQUENCE, INDEX, CONSTRAINT, COMMENT -> Severity.NON_BREAKING;
             };
             case MODIFIED -> switch (objectType) {
                 case COLUMN -> Severity.BREAKING;
-                default -> Severity.NON_BREAKING;
+                case TABLE, CONSTRAINT, INDEX, SEQUENCE, COMMENT -> Severity.NON_BREAKING;
             };
         };
     }

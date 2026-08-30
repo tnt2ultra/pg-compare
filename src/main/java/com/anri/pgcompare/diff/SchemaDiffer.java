@@ -88,7 +88,11 @@ public class SchemaDiffer {
                         severityClassifier.classify(ObjectType.COLUMN, ChangeType.MODIFIED),
                         String.join("; ", changes), before, after));
             }
+            diffComment(before.comment(), after.comment(),
+                    tableName + "." + columnName, before, after, entries);
         }
+        diffComment(sourceTable.comment(), targetTable.comment(),
+                tableName, sourceTable, targetTable, entries);
     }
 
     private List<String> columnChanges(ColumnDef before, ColumnDef after) {
@@ -106,6 +110,23 @@ public class SchemaDiffer {
                     display(before.defaultValue()), display(after.defaultValue())));
         }
         return changes;
+    }
+
+    /**
+     * Emits a COMMENT entry when the two comment texts differ. Missing comment is null,
+     * so a comment added on one side and removed on the other is a plain change.
+     * beforeOwner/afterOwner are the owning table/column definitions rendered in the report.
+     */
+    private void diffComment(String before, String after, String entryName,
+                             Object beforeOwner, Object afterOwner, List<DiffEntry> entries) {
+        if (Objects.equals(normalizeComment(before), normalizeComment(after))) {
+            return;
+        }
+        String description = "comment changed: %s -> %s".formatted(
+                displayComment(before), displayComment(after));
+        entries.add(new DiffEntry(ObjectType.COMMENT, entryName, ChangeType.MODIFIED,
+                severityClassifier.classify(ObjectType.COMMENT, ChangeType.MODIFIED),
+                description, beforeOwner, afterOwner));
     }
 
     private void diffConstraints(SchemaSnapshot source, SchemaSnapshot target, List<DiffEntry> entries) {
@@ -208,7 +229,15 @@ public class SchemaDiffer {
         return defaultValue == null ? "" : defaultValue.replaceAll("\\s+", " ").trim();
     }
 
+    private String normalizeComment(String comment) {
+        return comment == null ? "" : comment.trim();
+    }
+
     private String display(String value) {
         return value == null ? "none" : value;
+    }
+
+    private String displayComment(String comment) {
+        return comment == null ? "(no comment)" : "'" + comment + "'";
     }
 }
