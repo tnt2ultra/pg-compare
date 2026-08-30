@@ -30,4 +30,6 @@ target/
 .DS_Store
 .qwen
 .zcode
-
+*.sql
+*.json
+*.cmd

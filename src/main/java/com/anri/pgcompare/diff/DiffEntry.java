@@ -1,10 +1,16 @@
 package com.anri.pgcompare.diff;
 
 /**
- * @param objectName fully qualified object name, e.g. "users.email" for a column
- * @param before     value on the source side (null for ADDED)
- * @param after      value on the target side (null for REMOVED); before/after are Maps so
- *                   Jackson can render them without polymorphic typing
+ * Одна запись отчёта о различии двух схем.
+ *
+ * @param objectType  тип объекта, которого касается различие
+ * @param objectName  полностью квалифицированное имя объекта, например "users.email" для колонки
+ * @param changeType  тип изменения (добавление, удаление, изменение)
+ * @param severity    насколько изменение опасно для приложений
+ * @param description готовый текст различия; попадает в отчёт и потому остаётся английским
+ * @param before      значение со стороны источника ({@code null} для {@code ADDED})
+ * @param after       значение со стороны цели ({@code null} для {@code REMOVED}); это
+ *                    определение объекта целиком — {@link SchemaDiff} сериализуется в JSON как есть
  */
 public record DiffEntry(
         ObjectType objectType,

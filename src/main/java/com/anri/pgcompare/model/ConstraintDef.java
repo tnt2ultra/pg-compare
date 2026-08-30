@@ -3,14 +3,23 @@ package com.anri.pgcompare.model;
 import java.util.List;
 
 /**
- * @param columns            ordered constraint columns
- * @param referencedTable    FK only: referenced table (may be schema-qualified)
- * @param referencedColumns  FK only: ordered referenced columns
- * @param definition         canonical definition text from pg_get_constraintdef, used for comparison
- * @param notValid           FK/CHECK declared NOT VALID (pg_constraint.convalidated is false)
- * @param deferrable         pg_constraint.condeferrable — never rendered by pg_get_constraintdef,
- *                           so it is carried as a structured flag instead
- * @param initiallyDeferred  pg_constraint.condeferred
+ * Определение констрейнта. Сравнение идёт по каноническому тексту определения плюс по
+ * структурным флагам, которые сервер в этот текст не печатает.
+ *
+ * @param name                имя констрейнта
+ * @param type                вид констрейнта
+ * @param table               имя таблицы, на которой определён констрейнт
+ * @param columns             колонки констрейнта в порядке объявления
+ * @param referencedTable     только FK: опорная (referenced) таблица (может быть с именем схемы)
+ * @param referencedColumns   только FK: колонки опорной таблицы в порядке объявления
+ * @param definition          канонический текст определения из {@code pg_get_constraintdef},
+ *                            используется для сравнения
+ * @param notValid            FK/CHECK, объявленные как {@code NOT VALID}
+ *                            ({@code pg_constraint.convalidated} — {@code false})
+ * @param deferrable          {@code pg_constraint.condeferrable} — {@code pg_get_constraintdef}
+ *                            никогда не рендерит это свойство, поэтому оно переносится
+ *                            отдельным структурным флагом
+ * @param initiallyDeferred   {@code pg_constraint.condeferred}
  */
 public record ConstraintDef(
         String name,
@@ -25,14 +34,30 @@ public record ConstraintDef(
         boolean initiallyDeferred
 ) {
 
+    /**
+     * Конструктор без флагов: констрейнт объявлен без {@code NOT VALID} и без
+     * {@code DEFERRABLE}.
+     *
+     * @param name                имя констрейнта
+     * @param type                вид констрейнта
+     * @param table               имя таблицы, на которой определён констрейнт
+     * @param columns             колонки констрейнта в порядке объявления
+     * @param referencedTable     только FK: опорная (referenced) таблица
+     * @param referencedColumns   только FK: колонки опорной таблицы в порядке объявления
+     * @param definition          канонический текст определения из {@code pg_get_constraintdef}
+     */
     public ConstraintDef(String name, ConstraintType type, String table, List<String> columns,
                          String referencedTable, List<String> referencedColumns, String definition) {
         this(name, type, table, columns, referencedTable, referencedColumns, definition, false, false, false);
     }
 
     /**
-     * Trailing clauses that {@code pg_get_constraintdef} omits. Part of the comparison, so a
-     * flag-only change is reported, and appended verbatim to the generated ADD CONSTRAINT.
+     * Хвост флаговых предложений, которые {@code pg_get_constraintdef} не печатает.
+     * Участвует в сравнении — поэтому различие только по флагам тоже попадает в отчёт, —
+     * и дословно дописывается к генерируемому {@code ADD CONSTRAINT}.
+     *
+     * @return склейка {@code NOT VALID}, {@code DEFERRABLE}, {@code INITIALLY DEFERRED}
+     *         в этом порядке либо пустая строка, если флаги не установлены
      */
     public String flagsClause() {
         StringBuilder clause = new StringBuilder();

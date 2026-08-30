@@ -108,7 +108,7 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
-            <!-- *IT tests need Docker and run on `mvn verify`, keeping `mvn test` a fast unit-only pass -->
+            <!-- *IT-тесты требуют Docker и выполняются на `mvn verify`, поэтому `mvn test` остаётся быстрым прогоном только unit-тестов -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>

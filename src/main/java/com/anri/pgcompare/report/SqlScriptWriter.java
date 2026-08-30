@@ -15,14 +15,27 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * Renders DdlGenerator output into a runnable .sql migration script.
+ * Оформляет результат {@link DdlGenerator} как исполняемый .sql-скрипт миграции: шапка,
+ * служебные комментарии перед операторами, {@code ;} после каждого оператора и — по запросу —
+ * обёртка из одной транзакции. Текст шапки и комментариев в скрипте остаётся английским:
+ * скрипт — артефакт, его сравнивают между прогонами и подают в {@code psql}.
  */
 @Component
 @RequiredArgsConstructor
 public class SqlScriptWriter {
 
+    /** Преобразует различия в упорядоченный набор операторов. */
     private final DdlGenerator ddlGenerator;
 
+    /**
+     * Генерирует скрипт и перезаписывает им файл, при необходимости создавая родительские
+     * каталоги. Пустой дифф даёт скрипт без операторов — запуск такого файла безопасен.
+     *
+     * @param diff          результат сравнения (источник мигрирует к цели)
+     * @param outputFile    путь .sql-скрипта (аргумент {@code --ddl})
+     * @param transactional оборачивать ли операторы в {@code BEGIN}/{@code COMMIT}
+     * @throws CompareException если файл не удалось записать
+     */
     public void write(SchemaDiff diff, Path outputFile, boolean transactional) {
         List<DdlStatement> statements = ddlGenerator.generate(diff);
         StringBuilder script = new StringBuilder();
@@ -35,6 +48,7 @@ public class SqlScriptWriter {
         if (statements.isEmpty()) {
             script.append("\n-- Schemas are identical, nothing to migrate.\n");
         } else {
+            // Транзакция — способ не оставить схему на полпути; без неё об этом предупреждает шапка.
             if (transactional) {
                 script.append("\n-- One transaction: a failing statement leaves the schema untouched.\n")
                         .append("BEGIN;\n\n");
@@ -58,7 +72,8 @@ public class SqlScriptWriter {
             }
             Files.writeString(outputFile, script.toString(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new CompareException("Cannot write DDL script to %s: %s".formatted(outputFile, e.getMessage()), e);
+            throw new CompareException("Не удалось записать DDL-скрипт в %s: %s"
+                    .formatted(outputFile, e.getMessage()), e);
         }
     }
 }

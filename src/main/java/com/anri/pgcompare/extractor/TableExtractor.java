@@ -14,8 +14,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Reads tables, columns and their comments from pg_catalog. All rows of the schema
- * are fetched in one query per kind and grouped by table in memory.
+ * Читает таблицы, колонки и их комментарии из {@code pg_catalog}. Все строки схемы
+ * вычитываются одним запросом на каждый вид объектов, а затем группируются по
+ * таблицам в памяти.
  */
 @Component
 public class TableExtractor {
@@ -49,6 +50,21 @@ public class TableExtractor {
             ORDER BY tbl.relname, a.attnum
             """;
 
+    /**
+     * Сначала одним запросом к {@code pg_attribute} вычитываются все колонки схемы: тип из
+     * {@code format_type}, флаг NULL/NOT NULL, коды identity и generated, выражение дефолта из
+     * {@code pg_attrdef} и комментарий из {@code pg_description}. Колонки раскладываются по
+     * таблицам в {@link LinkedHashMap}, после чего запросом к {@code pg_class} (relkind
+     * {@code 'r'}) забираются сами таблицы с их комментариями.
+     *
+     * <p>Запрос колонок отсортирован по {@code tbl.relname, a.attnum}, поэтому порядок колонок
+     * внутри таблицы совпадает с порядком объявления; запрос таблиц отсортирован по имени.
+     * Оба порядка нужны для стабильного диффа между прогонами.
+     *
+     * @param jdbc   шаблон для запросов к каталогу конкретной БД
+     * @param schema имя сравниваемой схемы
+     * @return таблицы схемы с их колонками, отсортированные по имени таблицы
+     */
     public List<TableDef> extract(JdbcTemplate jdbc, String schema) {
         Map<String, List<ColumnDef>> columnsByTable = new LinkedHashMap<>();
         jdbc.query(COLUMNS_SQL, rs -> {
@@ -73,7 +89,17 @@ public class TableExtractor {
                 schema);
     }
 
-    /** pg_catalog flags are blank-padded single characters; '\0' marks "not set". */
+    /**
+     * Флаги в {@code pg_catalog} — одиночные символы, дополненные пробелами; пустое значение
+     * означает «флаг не установлен». {@code '\0'} используется в коде как признанный маркер
+     * «не задано»: тип {@code char} не допускает {@code null}, а нулевой символ не совпадает
+     * ни с одним реальным кодом каталога ({@code 's'} / {@code 'v'} у generated и
+     * {@code 'a'} / {@code 'd'} у identity), так что проверка {@code == '\0'} однозначно
+     * отличает unset от любого установленного флага.
+     *
+     * @param value сырое значение флага, вернутое драйвером (может быть {@code null} или пустым)
+     * @return первый символ значения либо {@code '\0'}, если флаг не установлен
+     */
     private static char code(String value) {
         return value == null || value.isEmpty() ? '\0' : value.charAt(0);
     }

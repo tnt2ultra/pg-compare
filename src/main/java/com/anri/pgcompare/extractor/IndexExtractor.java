@@ -7,8 +7,8 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Reads standalone indexes; indexes backing PK/UNIQUE constraints are excluded
- * (they are already reported as constraints).
+ * Читает самостоятельные индексы; индексы, обслуживающие PK/UNIQUE-констрейнты,
+ * исключены (они уже отдаются как констрейнты).
  */
 @Component
 public class IndexExtractor {
@@ -27,6 +27,19 @@ public class IndexExtractor {
             ORDER BY tbl.relname, i.relname
             """;
 
+    /**
+     * Вычитывает схему одним запросом к {@code pg_index}: имя, таблица-владелец, флаг уникальности
+     * и каноническое определение из {@code pg_get_indexdef}. Индексы, на которые опирается любой
+     * констрейнт ({@code pg_constraint.conindid}), отсекаются условием {@code NOT EXISTS} — иначе
+     * PK/UNIQUE попали бы в дифф дважды, как констрейнт и как индекс.
+     *
+     * <p>Сортировка {@code tbl.relname, i.relname} даёт детерминированный порядок, нужный для
+     * стабильного диффа между прогонами.
+     *
+     * @param jdbc   шаблон для запросов к каталогу конкретной БД
+     * @param schema имя сравниваемой схемы
+     * @return индексы схемы (без констрейнтных), отсортированные по таблице, затем по имени индекса
+     */
     public List<IndexDef> extract(JdbcTemplate jdbc, String schema) {
         return jdbc.query(SQL, (rs, i) -> new IndexDef(
                         rs.getString("name"),

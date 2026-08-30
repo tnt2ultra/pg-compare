@@ -20,10 +20,22 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Unit-тесты генератора миграционного DDL: проверяется и текст оператора, и его место в
+ * порядке зависимостей, и снятие/сохранение служебного комментария. Схема источника в
+ * фикстурах — {@code app}, цель — {@code app_v2}; квалифицированные имена в ожиданиях
+ * опираются именно на это.
+ */
 class DdlGeneratorTest {
 
     private final DdlGenerator generator = new DdlGenerator();
 
+    /**
+     * Оборачивает записи в дифф с фиксированными именами схем.
+     *
+     * @param entries записи различий
+     * @return дифф «app → app_v2»
+     */
     private SchemaDiff diff(List<DiffEntry> entries) {
         return new SchemaDiff("app", "app_v2", entries);
     }
@@ -347,10 +359,10 @@ class DdlGeneratorTest {
     @Test
     void droppedColumnSkipsDependentConstraintAndIndexDrops() {
         SchemaDiff d = diff(List.of(
-                // orders.status is being dropped...
+                // orders.status снимается...
                 new DiffEntry(ObjectType.COLUMN, "orders.status", ChangeType.REMOVED, Severity.BREAKING,
                         "removed", new ColumnDef("status", "varchar(20)", false, null, null), null),
-                // ...so this index and check constraint disappear with it and must not be dropped explicitly
+                // ...поэтому этот индекс и CHECK-констрейнт уходят вместе с ней и явно их дропать нельзя
                 new DiffEntry(ObjectType.INDEX, "orders.idx_status", ChangeType.REMOVED, Severity.NON_BREAKING,
                         "removed", new IndexDef("idx_status", "orders", false,
                                 "CREATE INDEX idx_status ON orders USING btree (status)"), null),
@@ -358,7 +370,7 @@ class DdlGeneratorTest {
                         Severity.NON_BREAKING, "removed",
                         new ConstraintDef("status_check", ConstraintType.CHECK, "orders",
                                 List.of("status"), null, null, "CHECK ((status)::text = 'new'::text)"), null),
-                // unrelated objects must still be emitted
+                // несвязанные объекты по-прежнему должны эмититься
                 new DiffEntry(ObjectType.COLUMN, "orders.note", ChangeType.REMOVED, Severity.BREAKING,
                         "removed", new ColumnDef("note", "text", true, null, null), null)));
 

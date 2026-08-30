@@ -7,8 +7,8 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Reads sequences that exist in their own right. Sequences backing an identity column
- * are skipped: they are part of the column definition and must not be created separately.
+ * Читает sequences, которые существуют сами по себе. Sequences, обслуживающие identity-колонку,
+ * пропускаются: они входят в определение колонки и не должны создаваться отдельно.
  */
 @Component
 public class SequenceExtractor {
@@ -30,6 +30,21 @@ public class SequenceExtractor {
             ORDER BY c.relname
             """;
 
+    /**
+     * Вычитывает схему одним запросом к {@code pg_sequence}: имя (из {@code pg_class}) и параметры
+     * {@code seqstart}, {@code seqincrement}, {@code seqmin}, {@code seqmax}. Внутренние зависимости
+     * отсекаются {@code NOT EXISTS} по {@code pg_depend} с deptype {@code 'i'} — это sequences,
+     * созданные identity-колонкой; они пересоздаются её определением, и отдельный
+     * {@code CREATE SEQUENCE} для них дал бы дубликат. Текущее значение ({@code last_value})
+     * в снимок не входит: сравниваются только параметры определения.
+     *
+     * <p>Сортировка {@code ORDER BY c.relname} даёт детерминированный порядок, нужный для
+     * стабильного диффа между прогонами.
+     *
+     * @param jdbc   шаблон для запросов к каталогу конкретной БД
+     * @param schema имя сравниваемой схемы
+     * @return «обычные» sequences схемы, отсортированные по имени
+     */
     public List<SequenceDef> extract(JdbcTemplate jdbc, String schema) {
         return jdbc.query(SQL, (rs, i) -> new SequenceDef(
                         rs.getString("name"),

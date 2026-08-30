@@ -31,35 +31,46 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * End-to-end round trip against a real PostgreSQL: two schemas are created, diffed,
- * the generated migration is applied to the source schema, and re-diffing must yield
- * zero differences. This is the regression net for DDL generation: any statement that
- * is silently dropped, mis-rendered or emitted in an invalid order leaves residual
- * differences and fails the last assertion.
+ * Сквозной round-trip на реальном PostgreSQL: создаются две схемы, сравниваются,
+ * сгенерированная миграция применяется к схеме-источнику, и повторное сравнение обязано
+ * дать ноль различий. Это страховка для генерации DDL: оператор, молча потерянный,
+ * искажённый или вставший в неверном порядке, оставляет остаточные различия — и последний
+ * assertion падает.
  *
- * <p>Runs against a Testcontainers PostgreSQL by default; set {@code PGCOMPARE_IT_URL}
- * (with optional {@code PGCOMPARE_IT_USER} / {@code PGCOMPARE_IT_PASSWORD}) to use an
- * already running server instead — handy for a CI service container or for a Docker
- * socket Testcontainers cannot reach. Skipped when neither is available.
+ * <p>По умолчанию прогоняется на Testcontainers-PostgreSQL; чтобы использовать уже
+ * запущенный сервер, задайте {@code PGCOMPARE_IT_URL} (опционально
+ * {@code PGCOMPARE_IT_USER} / {@code PGCOMPARE_IT_PASSWORD}) — удобно для CI-контейнера
+ * сервиса или для Docker-сокета, до которого testcontainers не дотягивается. Если недоступно
+ * и то и другое, тесты пропускаются.
  */
 class SchemaRoundTripIT {
 
+    /** Имя схемы-источника в тестовой базе. */
     private static final String SOURCE_SCHEMA = "src";
+
+    /** Имя целевой схемы в тестовой базе. */
     private static final String TARGET_SCHEMA = "tgt";
 
+    /** Запускаемый Postgres; {@code null}, когда используется внешняя база. */
     private static PostgreSQLContainer<?> container;
 
+    /**
+     * Поднимает контейнер, если не задана внешняя база.
+     */
     @BeforeAll
     static void prepareDatabase() {
         if (externalUrl() != null) {
             return;
         }
         Assumptions.assumeTrue(DockerClientFactory.instance().isDockerAvailable(),
-                "Docker is unavailable and PGCOMPARE_IT_URL is not set: skipping the round-trip IT");
+                "Docker недоступен и PGCOMPARE_IT_URL не задан: round-trip IT пропускается");
         container = new PostgreSQLContainer<>("postgres:17");
         container.start();
     }
 
+    /**
+     * Останавливает контейнер, если он запускался.
+     */
     @AfterAll
     static void stopDatabase() {
         if (container != null) {
@@ -67,16 +78,28 @@ class SchemaRoundTripIT {
         }
     }
 
+    /**
+     * @return JDBC URL внешней тестовой базы из окружения либо {@code null}
+     */
     private static String externalUrl() {
         return System.getenv("PGCOMPARE_IT_URL");
     }
 
+    /** Настоящий экстрактор: IT проверяет чтение каталога, а не его имитацию. */
     private final SchemaExtractor extractor = new SchemaExtractor(
             new TableExtractor(), new ConstraintExtractor(), new IndexExtractor(),
             new SequenceExtractor());
+
+    /** Сравнение снимков, собранных из реальной базы. */
     private final SchemaDiffer differ = new SchemaDiffer(new SeverityClassifier());
+
+    /** Генератор миграции, применяемый затем к схеме-источнику. */
     private final DdlGenerator generator = new DdlGenerator();
 
+    /**
+     * Состояние «как есть»: устаревшая таблица, констрейнты и индексы, которые миграция должна
+     * снять или пересобрать, две схемы-родители и несколько sequence.
+     */
     private static final List<String> SOURCE_DDL = List.of(
             "CREATE SCHEMA " + SOURCE_SCHEMA,
             "CREATE SCHEMA " + TARGET_SCHEMA,
@@ -107,10 +130,15 @@ class SchemaRoundTripIT {
             "CREATE SEQUENCE src.orphan_seq START WITH 1 INCREMENT BY 1"
     );
 
+    /**
+     * Желаемое состояние: набрано так, чтобы задеть все ветки генератора — изменение типа,
+     * снятие колонки с её индексами и констрейнтами, новые объекты, пересборка констрейнтов,
+     * identity и generated-колонки, комментарии и sequence.
+     */
     private static final List<String> TARGET_DDL = List.of(
-            // column type widened, phone re-typed and relaxed, status dropped together with
-            // its index and check constraint, new column, new check, unique constraint widened,
-            // table comment replaced, column comment added
+            // тип колонки расширен, phone перекрашен и ослаблен, status снята вместе со своим
+            // индексом и CHECK-констрейнтом, новая колонка, новый CHECK, состав UNIQUE расширен,
+            // комментарий таблицы заменён, у колонки появился комментарий
             """
             CREATE TABLE tgt.users (
                 id bigint NOT NULL,
@@ -127,8 +155,8 @@ class SchemaRoundTripIT {
             "COMMENT ON TABLE tgt.users IS 'application users'",
             "COMMENT ON COLUMN tgt.users.id IS 'stable user identifier'",
             "CREATE INDEX users_created_at_idx ON tgt.users (created_at)",
-            // docs gains an identity column, a stored generated column, an index,
-            // and its FK gains ON DELETE CASCADE
+            // у docs появляются identity-колонка, stored generated-колонка и индекс,
+            // а её FK получает ON DELETE CASCADE
             "CREATE TABLE tgt.docs (id bigint GENERATED BY DEFAULT AS IDENTITY,"
                     + " owner_id bigint, total integer,"
                     + " doubled integer GENERATED ALWAYS AS (total * 2) STORED,"
@@ -137,14 +165,14 @@ class SchemaRoundTripIT {
                     + " CONSTRAINT docs_owner_fk FOREIGN KEY (owner_id) REFERENCES tgt.users (id)"
                     + " ON DELETE CASCADE)",
             "CREATE INDEX docs_owner_idx ON tgt.docs (owner_id)",
-            // primary key of an unreferenced table changes shape: drop + recreate; new exclusion added
+            // меняется состав PK никем не адресуемой таблицы: снятие + пересоздание; добавлен EXCLUDE
             "CREATE TABLE tgt.tags (name character varying(50) NOT NULL, slug character varying(50),"
                     + " CONSTRAINT tags_pkey PRIMARY KEY (name, slug),"
                     + " CONSTRAINT tags_slug_excl EXCLUDE USING btree (slug WITH =))",
             "CREATE SEQUENCE tgt.doc_seq START WITH 100 INCREMENT BY 5",
             "CREATE SEQUENCE tgt.report_seq START WITH 1 INCREMENT BY 1",
-            // brand new table: identity PK, a nextval default pointing at a sequence created
-            // in the same migration, a NOT VALID FK and an index
+            // совершенно новая таблица: identity PK, дефолт nextval на sequence, созданный в этой же
+            // миграции, NOT VALID FK и индекс
             """
             CREATE TABLE tgt.reports (
                 id bigint GENERATED ALWAYS AS IDENTITY,
@@ -160,6 +188,11 @@ class SchemaRoundTripIT {
             "CREATE INDEX reports_title_idx ON tgt.reports (title)"
     );
 
+    /**
+     * Главный сценарий: миграция, применённая к источнику, делает схемы идентичными.
+     *
+     * @throws Exception если база недоступна или оператор миграции отвалился
+     */
     @Test
     void applyingGeneratedMigrationMakesSchemasIdentical() throws Exception {
         createSchemas();
@@ -168,7 +201,8 @@ class SchemaRoundTripIT {
         SchemaSnapshot target = extract(TARGET_SCHEMA);
         SchemaDiff before = differ.diff(source, target);
 
-        // the fixture must keep exercising the paths that were previously generated wrong
+        // фикстура обязана и дальше нагружать ветки, где генерация раньше ошиблась:
+        // изменённые констрейнты пересоздаются, а не правятся на месте
         assertThat(before.entries())
                 .filteredOn(e -> e.objectType() == ObjectType.CONSTRAINT
                         && e.changeType() == ChangeType.MODIFIED)
@@ -182,10 +216,15 @@ class SchemaRoundTripIT {
         SchemaSnapshot migrated = extract(SOURCE_SCHEMA);
         SchemaDiff residual = differ.diff(migrated, target);
         assertThat(residual.entries())
-                .as("residual differences after applying the generated migration")
+                .as("остаточные различия после применения сгенерированной миграции")
                 .isEmpty();
     }
 
+    /**
+     * Повторный прогон не должен найти ничего: иначе миграция неприменима дважды.
+     *
+     * @throws Exception если база недоступна или оператор миграции отвалился
+     */
     @Test
     void generatedMigrationIsIdempotent() throws Exception {
         createSchemas();
@@ -198,6 +237,12 @@ class SchemaRoundTripIT {
         assertThat(generator.generate(residual)).isEmpty();
     }
 
+    /**
+     * Несуществующая схема — это ошибка, а не пустой снимок: иначе опечатка в имени схемы дала бы
+     * ложное «схемы идентичны».
+     *
+     * @throws Exception если база недоступна
+     */
     @Test
     void extractionFailsForMissingSchema() throws Exception {
         createSchemas();
@@ -208,11 +253,22 @@ class SchemaRoundTripIT {
         }
     }
 
+    /**
+     * Строит дифф текущих схем и применяет полученную миграцию к источнику.
+     *
+     * @throws SQLException если база недоступна или оператор миграции отвалился
+     */
     private void applyMigrationOnce() throws SQLException {
         SchemaDiff before = differ.diff(extract(SOURCE_SCHEMA), extract(TARGET_SCHEMA));
         executeAll(generator.generate(before).stream().map(DdlStatement::sql).toList());
     }
 
+    /**
+     * Пересоздаёт обе тестовые схемы с нуля: каждый тест стартует с известной фикстуры,
+     * поэтому прогон в произвольном порядке и повторный прогон дают один и тот же результат.
+     *
+     * @throws SQLException если база недоступна или фикстура не применилась
+     */
     private void createSchemas() throws SQLException {
         executeAll(List.of(
                 "DROP SCHEMA IF EXISTS " + SOURCE_SCHEMA + " CASCADE",
@@ -220,6 +276,12 @@ class SchemaRoundTripIT {
         executeAll(List.of(SOURCE_DDL, TARGET_DDL).stream().flatMap(List::stream).toList());
     }
 
+    /**
+     * Выполняет операторы одним соединением и по порядку.
+     *
+     * @param statements SQL-операторы без завершающих {@code ;}
+     * @throws SQLException если первый же оператор отвалился — так потеря операторов не маскируется
+     */
     private void executeAll(List<String> statements) throws SQLException {
         try (Connection connection = openConnection(); Statement statement = connection.createStatement()) {
             for (String sql : statements) {
@@ -228,12 +290,21 @@ class SchemaRoundTripIT {
         }
     }
 
+    /**
+     * @param schema имя схемы
+     * @return снимок схемы, прочитанный из каталога
+     * @throws SQLException если база недоступна
+     */
     private SchemaSnapshot extract(String schema) throws SQLException {
         try (Connection connection = openConnection()) {
             return extractor.extract(connection, schema);
         }
     }
 
+    /**
+     * @return подключение к внешней базе из окружения либо к запущенному контейнеру
+     * @throws SQLException если подключение не установилось
+     */
     private Connection openConnection() throws SQLException {
         String url = externalUrl();
         if (url != null) {
@@ -245,6 +316,11 @@ class SchemaRoundTripIT {
                 container.getUsername(), container.getPassword());
     }
 
+    /**
+     * @param name имя переменной окружения
+     * @param fallback значение по умолчанию
+     * @return содержимое переменной или {@code fallback}, если она пуста
+     */
     private static String envOrDefault(String name, String fallback) {
         String value = System.getenv(name);
         return value == null || value.isBlank() ? fallback : value;

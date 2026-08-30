@@ -1,13 +1,21 @@
 package com.anri.pgcompare.model;
 
 /**
- * Column definition as read from pg_catalog. Names are stored as returned by the DB
- * (quoted identifiers keep their case), comparisons use normalized keys.
+ * Определение колонки, вычитанное из {@code pg_catalog}. Имена хранятся в том виде, как их
+ * вернула БД (экранированные идентификаторы сохраняют регистр), а сравнение идёт по
+ * нормализованным ключам.
  *
- * @param identity   identity kind for {@code GENERATED ... AS IDENTITY} columns, null otherwise
- * @param generated  expression of a {@code GENERATED ALWAYS AS (...)} column, null otherwise.
- *                   PostgreSQL keeps that expression in pg_attrdef, so it is reported here and
- *                   never as {@code defaultValue} — the two render as different DDL.
+ * @param name         имя колонки
+ * @param dataType     тип колонки в том виде, как его вернул {@code format_type}
+ * @param nullable     {@code true}, если колонка допускает NULL
+ * @param defaultValue выражение значения по умолчанию либо {@code null}; для
+ *                     generated-колонок всегда {@code null}
+ * @param identity     вид identity для колонок {@code GENERATED ... AS IDENTITY},
+ *                     {@code null} иначе
+ * @param generated  выражение {@code GENERATED ALWAYS AS (...)} колонки, {@code null} иначе.
+ *                   PostgreSQL хранит это выражение в pg_attrdef, поэтому оно сообщается здесь
+ *                   и никогда как {@code defaultValue} — в DDL это две разные конструкции.
+ * @param comment      комментарий колонки либо {@code null}, если он не задан
  */
 public record ColumnDef(
         String name,
@@ -19,6 +27,15 @@ public record ColumnDef(
         String comment
 ) {
 
+    /**
+     * Упрощённый конструктор для колонки без identity и без generated-выражения.
+     *
+     * @param name         имя колонки
+     * @param dataType     тип колонки
+     * @param nullable     допускает ли колонка NULL
+     * @param defaultValue выражение значения по умолчанию либо {@code null}
+     * @param comment      комментарий колонки либо {@code null}
+     */
     public ColumnDef(String name, String dataType, boolean nullable, String defaultValue, String comment) {
         this(name, dataType, nullable, defaultValue, null, null, comment);
     }

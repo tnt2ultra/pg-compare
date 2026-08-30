@@ -1,13 +1,21 @@
 package com.anri.pgcompare.diff;
 
 /**
- * Classifies how dangerous a change is for applications using the schema.
- * Comments are documentation-only and never break a running application; every removal takes
- * away something applications rely on — data, a uniqueness guarantee that {@code ON CONFLICT}
- * needs, a referential action, or a query plan — so removals are breaking.
+ * Определяет, насколько опасно изменение для приложений, работающих со схемой.
+ * Комментарии — только документация, они не ломают запущенное приложение; любое удаление
+ * забирает то, на что приложения опираются — данные, гарантию уникальности, нужную для
+ * {@code ON CONFLICT}, referential action или план запроса, — поэтому удаления считаются
+ * ломающими.
  */
 public class SeverityClassifier {
 
+    /**
+     * Классифицирует запись отчёта по типу объекта и типу изменения.
+     *
+     * @param objectType тип объекта (таблица, колонка, констрейнт, ...)
+     * @param changeType тип изменения (добавление, удаление, изменение)
+     * @return severity для отчёта и сводки
+     */
     public Severity classify(ObjectType objectType, ChangeType changeType) {
         if (objectType == ObjectType.COMMENT) {
             return Severity.INFO;
@@ -15,8 +23,8 @@ public class SeverityClassifier {
         return switch (changeType) {
             case REMOVED -> Severity.BREAKING;
             case ADDED -> Severity.NON_BREAKING;
-            // a changed column rewrites data applications already read; a redefined constraint
-            // or index keeps the object in place
+            // изменённая колонка переписывает данные, которые приложения уже читают;
+            // переопределённые констрейнт или индекс оставляют объект на месте
             case MODIFIED -> objectType == ObjectType.COLUMN
                     ? Severity.BREAKING
                     : Severity.NON_BREAKING;

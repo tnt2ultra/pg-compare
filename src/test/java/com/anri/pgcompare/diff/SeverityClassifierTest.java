@@ -4,6 +4,11 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Unit-тесты классификатора severity: правила заданы по типу объекта и типу изменения,
+ * поэтому проверяются все комбинации, а комментарии вынесены отдельно — они единственные
+ * не ломают приложение.
+ */
 class SeverityClassifierTest {
 
     private final SeverityClassifier classifier = new SeverityClassifier();
@@ -15,7 +20,7 @@ class SeverityClassifierTest {
                 continue;
             }
             assertThat(classifier.classify(type, ChangeType.REMOVED))
-                    .as("removing a %s", type)
+                    .as("удаление %s", type)
                     .isEqualTo(Severity.BREAKING);
         }
     }
@@ -27,7 +32,7 @@ class SeverityClassifierTest {
                 continue;
             }
             assertThat(classifier.classify(type, ChangeType.ADDED))
-                    .as("adding a %s", type)
+                    .as("добавление %s", type)
                     .isEqualTo(Severity.NON_BREAKING);
         }
     }
@@ -47,7 +52,7 @@ class SeverityClassifierTest {
     void commentChangesAreInformational() {
         for (ChangeType changeType : ChangeType.values()) {
             assertThat(classifier.classify(ObjectType.COMMENT, changeType))
-                    .as("comment %s", changeType)
+                    .as("комментарий: %s", changeType)
                     .isEqualTo(Severity.INFO);
         }
     }

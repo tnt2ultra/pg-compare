@@ -1,14 +1,19 @@
 spring:
   main:
+    # CLI-утилита: баннер Spring Boot загораживал бы сводку сравнения
     banner-mode: off
+    # Веб-контейнер не поднимается: процесс делает один проход и завершается
     web-application-type: none
   autoconfigure:
     exclude:
+      # DataSource не настраивается: подключения открывает ConnectionProvider — по одному на сторону
       - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
   sql:
     init:
+      # schema.sql/data.sql не применяются: утилита читает схемы и ничего в них не меняет
       mode: never
 
 logging:
   level:
+    # INFO-лог Spring в консоли только мешал бы сводке; остаются warn и ошибки
     root: warn

@@ -14,33 +14,45 @@ import java.util.stream.Collectors;
 import static com.anri.pgcompare.diff.ChangeType.*;
 
 /**
- * Turns a SchemaDiff (source = state to migrate, target = desired state) into a
- * migration script to be applied on the source database. Statements are emitted in
- * dependency-safe order: sequences -> tables -> columns -> constraints
- * (drops and non-FK first, FK last) -> indexes. Object names are qualified with the
- * source schema; extractor definitions were normalized (own schema prefix stripped),
- * so the generator re-qualifies where needed.
+ * Превращает {@link SchemaDiff} (источник = мигрируемое состояние, цель = желаемое состояние)
+ * в скрипт миграции, применяемый к базе-источнику. Операторы идут в безопасном по зависимостям
+ * порядке: sequence → таблицы → колонки → комментарии → констрейнты
+ * (снятия и не-FK первыми, FK последними) → индексы. Имена объектов квалифицируются схемой
+ * источника: экстрактор срезает с определений префикс собственной схемы, поэтому генератор
+ * возвращает квалификацию там, где она нужна.
  */
 public class DdlGenerator {
 
-    /** Matches `FOREIGN KEY (cols) REFERENCES tbl (cols)`, stopping before MATCH / ON clauses. */
+    /** Совпадает с {@code FOREIGN KEY (колонки) REFERENCES таблица (колонки)}, останавливаясь перед MATCH / ON. */
     private static final Pattern FK_HEAD_PATTERN =
             Pattern.compile("(?i)^\\s*FOREIGN KEY\\s*\\(.*?\\)\\s*REFERENCES\\s+\\S+?\\s*\\(.*?\\)");
 
-    /** An unqualified regclass literal, e.g. the sequence inside {@code nextval('doc_seq'::regclass)}. */
+    /** Неквалифицированный regclass-литерал, например последовательность внутри {@code nextval('doc_seq'::regclass)}. */
     private static final Pattern REGCLASS_LITERAL_PATTERN =
             Pattern.compile("'([\\w$]+)'::(?:pg_catalog\\.)?regclass");
 
+    /**
+     * Строит полный набор операторов миграции.
+     *
+     * <p>Перед обходом вычисляются два «каскадных» множества, чтобы не эмитировать операторы,
+     * которые PostgreSQL выполнит сам или которые на его фоне упадут: таблицы, снимаемые целиком,
+     * и колонки, снимаемые по таблице.
+     *
+     * @param diff результат сравнения схем
+     * @return операторы в порядке применения
+     * @throws CompareException если для констрейнта нет канонического определения и эмитировать
+     *                          нечего (CHECK/EXCLUDE)
+     */
     public List<DdlStatement> generate(SchemaDiff diff) {
         String schema = diff.sourceSchema();
-        // tables dropped by this migration make their column/constraint/index entries redundant
+        // снимаемые этой миграцией таблицы делают её записи о колонках/констрейнтах/индексах избыточными
         Set<String> droppedTables = select(diff, ObjectType.TABLE).stream()
                 .filter(e -> e.changeType() == REMOVED)
                 .map(DiffEntry::objectName)
                 .map(String::toLowerCase)
                 .collect(Collectors.toSet());
-        // dropping a column cascades to constraints and indexes using it,
-        // so explicit drops of those objects would fail at runtime
+        // снятие колонки каскадно забирает констрейнты и индексы, которые её используют,
+        // поэтому явные снятия таких объектов упадут во время выполнения
         Map<String, Set<String>> droppedColumnsByTable = select(diff, ObjectType.COLUMN).stream()
                 .filter(e -> e.changeType() == REMOVED)
                 .collect(Collectors.groupingBy(
@@ -56,6 +68,14 @@ public class DdlGenerator {
         return statements;
     }
 
+    /**
+     * Снимает/создаёт sequence и правляет их параметры. {@code ALTER SEQUENCE} допускает только
+     * те значения, которые изменились, — иначе он переписал бы остаток на дефолтный.
+     *
+     * @param diff результат сравнения схем
+     * @param schema схема источника
+     * @param out аккумулятор операторов
+     */
     private void sequences(SchemaDiff diff, String schema, List<DdlStatement> out) {
         for (DiffEntry e : select(diff, ObjectType.SEQUENCE)) {
             if (e.changeType() == ADDED) {
@@ -88,6 +108,14 @@ public class DdlGenerator {
         }
     }
 
+    /**
+     * Создаёт и снимает таблицы. Комментарий новой таблицы эмитится отдельным оператором:
+     * {@code CREATE TABLE} его не принимает, и то же тело колонки используется в {@code ADD COLUMN}.
+     *
+     * @param diff результат сравнения схем
+     * @param schema схема источника
+     * @param out аккумулятор операторов
+     */
     private void tables(SchemaDiff diff, String schema, List<DdlStatement> out) {
         for (DiffEntry e : select(diff, ObjectType.TABLE)) {
             if (e.changeType() == ADDED) {
@@ -104,6 +132,12 @@ public class DdlGenerator {
         }
     }
 
+    /**
+     * @param schema схема источника
+     * @param table определение таблицы из цели
+     * @return тело {@code CREATE TABLE} со всеми колонками, но без констрейнтов и комментариев:
+     *         они добавляются отдельными операторами, чтобы порядок зависел от секций генератора
+     */
     private String createTable(String schema, TableDef table) {
         StringBuilder sql = new StringBuilder("CREATE TABLE ")
                 .append(qualify(schema, table.name())).append(" (\n");
@@ -118,7 +152,14 @@ public class DdlGenerator {
         return sql.append(")").toString();
     }
 
-    /** Column body shared by CREATE TABLE and ADD COLUMN: type, identity/generation, NOT NULL, DEFAULT. */
+    /**
+     * Описание колонки, общее для {@code CREATE TABLE} и {@code ADD COLUMN}: тип,
+     * identity/generation, NOT NULL, DEFAULT.
+     *
+     * @param schema схема источника (нужна для квалификации regclass-дефолтов)
+     * @param c определение колонки
+     * @return фрагмент SQL без ведущего имени таблицы
+     */
     private String columnBody(String schema, ColumnDef c) {
         StringBuilder sql = new StringBuilder(q(c.name())).append(' ').append(c.dataType());
         if (c.identity() != null) {
@@ -138,9 +179,13 @@ public class DdlGenerator {
     }
 
     /**
-     * The extractor strips the compared schema from {@code 'seq'::regclass} literals for
-     * comparison; put it back so the default resolves without relying on search_path.
-     * Already-qualified (cross-schema) references are left alone.
+     * Экстрактор срезает сравниваемую схему из литералов {@code 'seq'::regclass} ради сравнения;
+     * здесь она возвращается, чтобы дефолт разрешался без опоры на search_path.
+     * Уже квалифицированные (межсхемные) ссылки остаются как есть.
+     *
+     * @param schema схема источника
+     * @param defaultValue выражение DEFAULT из каталога
+     * @return выражение DEFAULT с возвращённой квалификацией
      */
     private String qualifyDefault(String schema, String defaultValue) {
         Matcher literal = REGCLASS_LITERAL_PATTERN.matcher(defaultValue);
@@ -151,6 +196,15 @@ public class DdlGenerator {
                 Matcher.quoteReplacement("'" + q(schema) + "." + q(literal.group(1)) + "'::regclass"));
     }
 
+    /**
+     * Добавляет, снимает и изменяет колонки. Записи колонок снимаемых таблиц пропускаются —
+     * {@code DROP TABLE} забирает их с собой.
+     *
+     * @param diff результат сравнения схем
+     * @param schema схема источника
+     * @param droppedTables имена снимаемых таблиц (нижний регистр)
+     * @param out аккумулятор операторов
+     */
     private void columns(SchemaDiff diff, String schema, Set<String> droppedTables, List<DdlStatement> out) {
         for (DiffEntry e : select(diff, ObjectType.COLUMN)) {
             String[] parts = splitName(e.objectName());
@@ -181,11 +235,25 @@ public class DdlGenerator {
         }
     }
 
+    /**
+     * Разворачивает изменение одной колонки в операторы {@code ALTER TABLE}.
+     *
+     * <p>Порядок внутри колонки важен: смена generated-колонки обрабатывается раньше остальных и
+     * завершает метод, потому что {@code DROP}/{@code ADD COLUMN} уже пересоздаёт колонку со всеми
+     * её атрибутами из целевого определения.
+     *
+     * @param schema схема источника
+     * @param table квалифицированное имя таблицы
+     * @param column экранированное имя колонки
+     * @param before колонка источника
+     * @param after колонка цели
+     * @param out аккумулятор операторов
+     */
     private void emitColumnAlter(String schema, String table, String column,
                                  ColumnDef before, ColumnDef after, List<DdlStatement> out) {
         if (!Objects.equals(before.generated(), after.generated())) {
-            // a generation expression cannot be altered in place; the value is derived from the
-            // row, so recreating the column does not lose user data
+            // выражение генерации нельзя изменить на месте; значение выводится из строки,
+            // поэтому пересоздание колонки не теряет пользовательские данные
             out.add(DdlStatement.commented(
                     "ALTER TABLE %s DROP COLUMN %s".formatted(table, column),
                     "review: generated column is recreated from its new expression,"
@@ -227,7 +295,16 @@ public class DdlGenerator {
         }
     }
 
-    /** COMMENT ON statements for changed table/column comments (target state wins). */
+    /**
+     * Эмитит {@code COMMENT ON} для изменённых комментариев таблиц и колонок (побеждает цель).
+     * Имя в записи диффа — «таблица» или «таблица.колонка», по количеству частей определяется
+     * вид объекта.
+     *
+     * @param diff результат сравнения схем
+     * @param schema схема источника
+     * @param droppedTables имена снимаемых таблиц (нижний регистр)
+     * @param out аккумулятор операторов
+     */
     private void comments(SchemaDiff diff, String schema, Set<String> droppedTables,
                           List<DdlStatement> out) {
         for (DiffEntry e : select(diff, ObjectType.COMMENT)) {
@@ -246,6 +323,10 @@ public class DdlGenerator {
         }
     }
 
+    /**
+     * @param owner определение владельца комментария со стороны цели (таблица или колонка)
+     * @return комментарий владельца либо {@code null}, если тип владельца не распознался
+     */
     private String commentOf(Object owner) {
         if (owner instanceof TableDef t) {
             return t.comment();
@@ -256,11 +337,29 @@ public class DdlGenerator {
         return null;
     }
 
-    /** SQL string literal; null renders as NULL (COMMENT ... IS NULL removes the comment). */
+    /**
+     * @param comment текст комментария
+     * @return SQL-строковый литерал; {@code null} превращается в {@code NULL}, то есть
+     *         {@code COMMENT ... IS NULL} снимает комментарий
+     */
     private String commentLiteral(String comment) {
         return comment == null ? "NULL" : "'" + comment.replace("'", "''") + "'";
     }
 
+    /**
+     * Пересоздаёт констрейнты: сначала все снятия, затем добавления — иначе новый констрейнт
+     * упадёт на ещё существующем старом. Внутри добавлений не-FK идут раньше FK, чтобы опорные
+     * таблицы успели стать валидными до проверки ссылок.
+     *
+     * <p>Изменённый констрейнт нельзя починить на месте в общем случае (меняется состав колонок),
+     * поэтому он снимается и создаётся заново из целевого определения.
+     *
+     * @param diff результат сравнения схем
+     * @param schema схема источника
+     * @param droppedTables имена снимаемых таблиц (нижний регистр)
+     * @param droppedColumnsByTable снимаемые колонки по таблицам (в исходном регистре)
+     * @param out аккумулятор операторов
+     */
     private void constraints(SchemaDiff diff, String schema, Set<String> droppedTables,
                              Map<String, Set<String>> droppedColumnsByTable, List<DdlStatement> out) {
         List<DiffEntry> added = new ArrayList<>();
@@ -276,7 +375,7 @@ public class DdlGenerator {
                     && ((ConstraintDef) e.before()).columns().stream()
                             .anyMatch(col -> droppedColumnsByTable.getOrDefault(table, Set.of())
                                     .contains(col))) {
-                continue; // dropped implicitly with its column
+                continue; // констрейнт уйдёт каскадно вместе со своей колонкой
             }
             switch (e.changeType()) {
                 case ADDED -> added.add(e);
@@ -297,14 +396,22 @@ public class DdlGenerator {
                     "definition changed, re-added below; the drop fails if a foreign key"
                             + " or a view depends on this constraint"));
         }
-        // a modified constraint is dropped above and re-created from the target definition here;
-        // non-FK before FK so referenced tables are ready before validation
+        // изменённый констрейнт снят выше и пересоздан здесь из целевого определения;
+        // не-FK раньше FK, чтобы опорные таблицы были готовы до валидации
         List<DiffEntry> toCreate = new ArrayList<>(added);
         toCreate.addAll(modified);
         emitAddConstraints(toCreate, schema, out, false);
         emitAddConstraints(toCreate, schema, out, true);
     }
 
+    /**
+     * Второй проход над констрейнтами к созданию: один вызов эмитит только не-FK, второй — только FK.
+     *
+     * @param toCreate констрейнты к добавлению (новые и изменённые)
+     * @param schema схема источника
+     * @param out аккумулятор операторов
+     * @param foreignKeys {@code true} — обрабатывать только FK, {@code false} — только не-FK
+     */
     private void emitAddConstraints(List<DiffEntry> toCreate, String schema, List<DdlStatement> out,
                                     boolean foreignKeys) {
         for (DiffEntry e : toCreate) {
@@ -320,6 +427,16 @@ public class DdlGenerator {
         }
     }
 
+    /**
+     * Собирает тело констрейнта для {@code ADD CONSTRAINT} — инлайн-форму, а не
+     * {@code USING INDEX}: снимая констрейнт, PostgreSQL снимает и его индекс, так что
+     * переиспользовать старый индекс нельзя.
+     *
+     * @param schema схема источника
+     * @param c определение констрейнта из цели
+     * @return фрагмент SQL после {@code ADD CONSTRAINT "имя" }
+     * @throws CompareException если CHECK/EXCLUDE пришли без канонического определения
+     */
     private String inlineDefinition(String schema, ConstraintDef c) {
         return switch (c.type()) {
             case PRIMARY_KEY -> "PRIMARY KEY (" + columns(c.columns()) + ")";
@@ -331,19 +448,30 @@ public class DdlGenerator {
         };
     }
 
-    /** EXCLUDE and CHECK are rendered from the canonical definition only; without one there is nothing to emit. */
+    /**
+     * CHECK и EXCLUDE восстанавливаются только из канонического определения: без него
+     * эмитировать нечего, а молча пропустить констрейнт — значит оставить схему расходящейся.
+     *
+     * @param c определение констрейнта
+     * @return каноническое определение
+     * @throws CompareException если определения нет
+     */
     private String requireDefinition(ConstraintDef c) {
         if (c.definition() == null) {
             throw new CompareException(
-                    "Cannot generate DDL for %s constraint '%s': no definition".formatted(c.type(), c.name()));
+                    "Не удалось сгенерировать DDL для констрейнта %s '%s': нет определения".formatted(c.type(), c.name()));
         }
         return c.definition();
     }
 
     /**
-     * {@code pg_get_constraintdef} renders MATCH / ON DELETE / ON UPDATE only inside the
-     * definition text, after the referenced column list, so the tail is carried over verbatim
-     * instead of being rebuilt from the (absent) structured fields.
+     * {@code pg_get_constraintdef} печатает MATCH / ON DELETE / ON UPDATE только в тексте
+     * определения, после списка опорных колонок, поэтому «хвост» переносится дословно —
+     * пересобирать его из (отсутствующих) структурных полей не из чего.
+     *
+     * @param definition каноническое определение FK
+     * @return всё, что идёт за головой {@code FOREIGN KEY ... REFERENCES ... (...)}, с ведущим пробелом
+     *         либо пустая строка
      */
     private String foreignKeyTail(String definition) {
         if (definition == null) {
@@ -357,10 +485,25 @@ public class DdlGenerator {
         return tail.isEmpty() ? "" : " " + tail;
     }
 
+    /**
+     * @param columns имена колонок в исходном порядке констрейнта
+     * @return экранированный список колонок для SQL
+     */
     private String columns(List<String> columns) {
         return columns.stream().map(this::q).collect(Collectors.joining(", "));
     }
 
+    /**
+     * Снимает и пересоздаёт индексы. Индекс нельзя изменить на месте, поэтому {@code MODIFIED}
+     * даёт пару {@code DROP INDEX} + создание. Индексы, накрывающие снимаемую колонку,
+     * не эмитятся: PostgreSQL уберёт их каскадно, а явное снятие упадёт.
+     *
+     * @param diff результат сравнения схем
+     * @param schema схема источника
+     * @param droppedTables имена снимаемых таблиц (нижний регистр)
+     * @param droppedColumnsByTable снимаемые колонки по таблицам (в исходном регистре)
+     * @param out аккумулятор операторов
+     */
     private void indexes(SchemaDiff diff, String schema, Set<String> droppedTables,
                          Map<String, Set<String>> droppedColumnsByTable, List<DdlStatement> out) {
         for (DiffEntry e : select(diff, ObjectType.INDEX)) {
@@ -372,7 +515,7 @@ public class DdlGenerator {
             if (e.changeType() == REMOVED
                     && mentionsAnyColumn(((IndexDef) e.before()).definition(),
                             droppedColumnsByTable.getOrDefault(table, Set.of()))) {
-                continue; // dropped implicitly with its column
+                continue; // индекс уйдёт каскадно вместе со своей колонкой
             }
             if (e.changeType() == ADDED) {
                 IndexDef i = (IndexDef) e.after();
@@ -391,19 +534,38 @@ public class DdlGenerator {
         }
     }
 
-    /** Index definitions were normalized (schema prefix stripped); re-qualify the table. */
+    /**
+     * Определения индексов нормализованы (префикс схемы срезан) — возвращаем квалификацию таблицы.
+     * Правится только позиция после {@code ON}, поэтому method/колонки/predicate не затрагиваются.
+     *
+     * @param definition каноническое определение {@code CREATE INDEX}
+     * @param schema схема источника
+     * @return определение с квалифицированным именем таблицы
+     */
     private String qualifyIndexTable(String definition, String schema) {
         return definition.replaceFirst("(?i)(\\sON\\s)(\"?[\\w]+\"?)(\\s|\\()",
                 "$1" + Matcher.quoteReplacement(q(schema)) + ".$2$3");
     }
 
+    /**
+     * @param diff результат сравнения схем
+     * @param objectType нужный тип объекта
+     * @return записи только этого типа, в исходном порядке диффа
+     */
     private List<DiffEntry> select(SchemaDiff diff, ObjectType objectType) {
         return diff.entries().stream()
                 .filter(e -> e.objectType() == objectType)
                 .toList();
     }
 
-    /** Word-boundary match of column names in a canonical index definition. */
+    /**
+     * Проверяет, упоминается ли хоть одна из колонок в каноническом определении индекса.
+     * Совпадение — по границам слова, чтобы {@code id} не «нашёл» {@code user_id}.
+     *
+     * @param definition определение индекса
+     * @param columnNames имена снимаемых колонок этой таблицы
+     * @return {@code true}, если индекс зависит от снимаемой колонки
+     */
     private boolean mentionsAnyColumn(String definition, Set<String> columnNames) {
         for (String column : columnNames) {
             if (definition.matches("(?i).*\\b" + Pattern.quote(column) + "\\b.*")) {
@@ -413,6 +575,12 @@ public class DdlGenerator {
         return false;
     }
 
+    /**
+     * Режет квалифицированное имя записи диффа.
+     *
+     * @param qualifiedName имя вида «таблица.объект» или одиночное имя таблицы/sequence
+     * @return одна часть для родителя и две — для дочернего объекта
+     */
     private String[] splitName(String qualifiedName) {
         int dot = qualifiedName.indexOf('.');
         if (dot < 0) {
@@ -421,7 +589,13 @@ public class DdlGenerator {
         return new String[]{qualifiedName.substring(0, dot), qualifiedName.substring(dot + 1)};
     }
 
-    /** Qualified name: schema.table; cross-schema references (already dotted) are kept as-is. */
+    /**
+     * Квалифицированное имя {@code схема.таблица}; межсхемные ссылки (уже с точкой) сохраняются как есть.
+     *
+     * @param schema схема источника
+     * @param tableName имя таблицы, возможно уже с префиксом схемы
+     * @return экранированное квалифицированное имя
+     */
     private String qualify(String schema, String tableName) {
         if (tableName.contains(".")) {
             return Arrays.stream(tableName.split("\\.")).map(this::q).collect(Collectors.joining("."));
@@ -429,7 +603,13 @@ public class DdlGenerator {
         return q(schema) + "." + q(tableName);
     }
 
-    /** Quotes an identifier with double quotes; names come from pg_catalog as stored. */
+    /**
+     * Экранирует идентификатор двойными кавычками; имена приходят из pg_catalog в том виде,
+     * в каком сохранены, поэтому кавычки обязательны — иначе регистр и ключевые слова «поплывут».
+     *
+     * @param identifier имя объекта
+     * @return экранированный идентификатор
+     */
     private String q(String identifier) {
         return '"' + identifier.replace("\"", "\"\"") + '"';
     }

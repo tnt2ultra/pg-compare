@@ -3,9 +3,11 @@ package com.anri.pgcompare.diff;
 import java.util.List;
 
 /**
- * @param sourceSchema schema name of the source side
- * @param targetSchema schema name of the target side
- * @param entries      all differences, ordered by object type and name
+ * Результат сравнения двух схем — то, что уходит в JSON-отчёт и в консольную сводку.
+ *
+ * @param sourceSchema имя схемы со стороны источника
+ * @param targetSchema имя схемы со стороны цели
+ * @param entries      все различия, упорядоченные по типу объекта и имени
  */
 public record SchemaDiff(
         String sourceSchema,
@@ -13,6 +15,9 @@ public record SchemaDiff(
         List<DiffEntry> entries
 ) {
 
+    /**
+     * @return {@code true}, если схемы идентичны и записей нет
+     */
     public boolean isEmpty() {
         return entries.isEmpty();
     }

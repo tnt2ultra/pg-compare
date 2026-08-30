@@ -16,10 +16,25 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Unit-тесты сравнения снимков схемы: обнаружение добавлений/снятий/изменений, регистронезависимое
+ * сопоставление имён и severity записей. БД не нужна — тесты работают на records из пакета model.
+ * Ожидания сравнивают тексты описаний различий дословно: они попадают в JSON-отчёт и потому
+ * остаются английскими.
+ */
 class SchemaDifferTest {
 
     private final SchemaDiffer differ = new SchemaDiffer(new SeverityClassifier());
 
+    /**
+     * Фикстура снимка с именем схемы {@code public} и остальными секциями по умолчанию.
+     *
+     * @param tables таблицы
+     * @param constraints констрейнты
+     * @param indexes индексы
+     * @param sequences sequence
+     * @return снимок схемы
+     */
     private SchemaSnapshot snapshot(List<TableDef> tables,
                                     List<ConstraintDef> constraints,
                                     List<IndexDef> indexes,

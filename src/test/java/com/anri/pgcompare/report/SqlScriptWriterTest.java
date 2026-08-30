@@ -18,10 +18,17 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Unit-тесты записи миграционного .sql: проверка шапки-обёртки, порядка операторов
+ * относительно {@code BEGIN}/{@code COMMIT} и того, что служебный комментарий стоит над своим
+ * оператором. Содержимое SQL-текстов здесь не проверяется — это ответственность
+ * {@code DdlGeneratorTest}.
+ */
 class SqlScriptWriterTest {
 
     private final SqlScriptWriter writer = new SqlScriptWriter(new DdlGenerator());
 
+    /** Временный каталог JUnit: файл скрипта пишется туда и не оставляет мусора в репозитории. */
     @TempDir
     Path dir;
 
@@ -62,12 +69,24 @@ class SqlScriptWriterTest {
         assertThat(script).contains("-- BREAKING: drops all data in the table\nDROP TABLE \"app\".\"legacy\";");
     }
 
+    /**
+     * @return минимальный дифф ровно с одним оператором (добавление nullable-колонки),
+     *         чтобы тесты обёртки не зависели от генератора
+     */
     private SchemaDiff diffWithOneStatement() {
         return new SchemaDiff("app", "app_v2", List.of(new DiffEntry(
                 ObjectType.COLUMN, "users.age", ChangeType.ADDED, Severity.NON_BREAKING, "added", null,
                 new ColumnDef("age", "integer", true, null, null))));
     }
 
+    /**
+     * Прогоняет запись скрипта во временный каталог и возвращает его содержимое.
+     *
+     * @param diff дифф для генерации
+     * @param transactional оборачивать ли в транзакцию
+     * @return текст получившегося .sql-скрипта
+     * @throws IOException если временный файл не удалось прочитать
+     */
     private String write(SchemaDiff diff, boolean transactional) throws IOException {
         Path out = dir.resolve("migration.sql");
         writer.write(diff, out, transactional);
