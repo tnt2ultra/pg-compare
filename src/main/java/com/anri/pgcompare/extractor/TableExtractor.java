@@ -70,6 +70,9 @@ public class TableExtractor {
         jdbc.query(COLUMNS_SQL, rs -> {
             String expression = DefinitionNormalizer.normalizeDefault(rs.getString("column_expression"), schema);
             char generated = code(rs.getString("generated"));
+            // pg_attrdef хранит и DEFAULT, и выражение генерации: одно и то же значение
+            // pg_get_expr попадает либо в defaultValue, либо в ColumnGeneration — разделение
+            // идёт по attgenerated, иначе сгенерированная колонка получила бы фантомный дефолт
             ColumnDef column = new ColumnDef(
                     rs.getString("name"),
                     rs.getString("data_type"),

@@ -12,9 +12,10 @@ package com.anri.pgcompare.model;
  *                     generated-колонок всегда {@code null}
  * @param identity     вид identity для колонок {@code GENERATED ... AS IDENTITY},
  *                     {@code null} иначе
- * @param generated  выражение {@code GENERATED ALWAYS AS (...)} колонки, {@code null} иначе.
- *                   PostgreSQL хранит это выражение в pg_attrdef, поэтому оно сообщается здесь
- *                   и никогда как {@code defaultValue} — в DDL это две разные конструкции.
+ * @param generated    выражение {@code GENERATED ALWAYS AS (...)} колонки, {@code null} иначе.
+ *                     PostgreSQL хранит это выражение в {@code pg_attrdef}, поэтому оно
+ *                     сообщается здесь и никогда как {@code defaultValue} — в DDL это две
+ *                     разные конструкции.
  * @param comment      комментарий колонки либо {@code null}, если он не задан
  */
 public record ColumnDef(

@@ -5,6 +5,16 @@ CLI-утилита для сравнения схем двух баз PostgreSQL
 
 Стек: Java 25, Spring Boot 4, Lombok, picocli, JDBC (pg_catalog).
 
+## Документация
+
+Развёрнутая документация — в каталоге [docs/](docs/README.md):
+[техническое задание](docs/TERMS_OF_REFERENCE.md),
+[спецификация поведения](docs/SPECIFICATION.md),
+[архитектура](docs/ARCHITECTURE.md),
+[требования с трассировкой на тесты](docs/REQUIREMENTS.md),
+[руководство пользователя](docs/USER_GUIDE.md).
+Ниже — краткий обзор; при расхождении с docs/ источник истины — код и тесты.
+
 ## Возможности
 
 - Сравнение таблиц, колонок (тип, NULL/NOT NULL, DEFAULT, `GENERATED ... AS IDENTITY`,
@@ -79,7 +89,7 @@ DROP TABLE "app"."legacy_log";
 ALTER TABLE "app"."users" ALTER COLUMN "email" TYPE character varying(255);
 ```
 
-Перед выполнением reviewing обязателен: смена типа колонки может требовать `USING`,
+Перед выполнением обязательно ревью: смена типа колонки может требовать `USING`,
 `SET NOT NULL` — предварительного бэкфилла данных.
 
 По умолчанию весь скрипт обёрнут в одну транзакцию (`BEGIN`/`COMMIT`), поэтому упавшая на
